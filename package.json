@@ -1,6 +1,6 @@
 {
   "name": "sisso-sage",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "AI-ready SISSO analysis and evidence-driven model selection toolkit",
   "private": true,
   "type": "module",
@@ -31,6 +31,7 @@
   ],
   "scripts": {
     "test": "node --test",
+    "check:readme": "node ./scripts/check-readme.mjs",
     "smoke": "node ./bin/sisso-sage.mjs capabilities",
     "build:mcp": "node ./scripts/build-mcp.mjs",
     "mcp": "node ./mcp/server.mjs",

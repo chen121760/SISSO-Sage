@@ -38891,7 +38891,7 @@ var StdioServerTransport = class {
 };
 
 // src/version.mjs
-var VERSION = "0.3.0";
+var VERSION = "0.3.1";
 
 // src/capabilities.mjs
 var CAPABILITIES = {

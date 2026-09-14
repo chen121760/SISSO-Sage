@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.1
+
+Documentation and no-install clarity.
+
+- README leads with a copy-paste quick start: clone, then run. The former
+  "Requirements" section was moved below it and now states plainly that
+  **Node.js 18+ is the only requirement** and that `npm install` is needed only
+  to run the test suite or rebuild the MCP bundle. Both the CLI and the prebuilt
+  `dist/sisso-sage-mcp.mjs` work from a fresh clone with no installation.
+- README documents `--limit` semantics, the hold-out `leakage` verdicts as a
+  table, the feature-dictionary columns, and the two narrow heuristics that
+  should not be over-read (the singularities flag and MT coefficient differences).
+- Added `scripts/check-readme.mjs` (`npm run check:readme`), which asserts the
+  documented commands, flags, dictionary columns, leakage verdicts and `--limit`
+  cap still match the code, and that the no-install claim holds (the bundle
+  imports only Node builtins and no `src/` module imports an external package).
+
+No behavioural change.
+
 ## 0.3.0
 
 Fixes and additions driven by using the toolkit on real SISSO runs. Nothing here
