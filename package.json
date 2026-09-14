@@ -1,6 +1,6 @@
 {
   "name": "sisso-sage",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "AI-ready SISSO analysis and evidence-driven model selection toolkit",
   "private": true,
   "type": "module",

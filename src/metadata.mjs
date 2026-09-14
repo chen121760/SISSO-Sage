@@ -10,6 +10,25 @@ function normalizeFeatureRecords(raw) {
   return Object.fromEntries(Object.entries(source).map(([name, value]) => [name, { name, ...(value || {}) }]));
 }
 
+// Split one CSV line into trimmed fields (RFC4180 quoting, no embedded newlines).
+function splitCsvLine(line) {
+  const fields = [];
+  let field = "", quoted = false;
+  const text = String(line || "");
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (quoted) {
+      if (char === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (char === '"') quoted = false;
+      else field += char;
+    } else if (char === '"') quoted = true;
+    else if (char === ",") { fields.push(field); field = ""; }
+    else field += char;
+  }
+  fields.push(field.replace(/\r$/, ""));
+  return fields.map((value) => value.trim());
+}
+
 function csvRows(text) {
   const rows = [];
   let row = [], field = "", quoted = false;
@@ -73,22 +92,98 @@ export function parseUnitManifest(text) {
   return features;
 }
 
+// The columns a feature dictionary must use for SISSO-Sage to read it. A
+// dictionary written with near-miss names (feature_name / description /
+// category / source_file) previously parsed to zero features in total silence,
+// which looked identical to "no dictionary supplied". Detect that explicitly.
+const DICTIONARY_COLUMNS = ["feature", "note", "unit", "group", "source"];
+const DICTIONARY_ALIASES = {
+  feature: ["feature", "feature_name", "name", "feature_id"],
+  note: ["note", "description", "desc", "meaning"],
+  unit: ["unit", "units"],
+  group: ["group", "category", "family", "class"],
+  source: ["source", "source_file", "provenance", "file"],
+};
+function headerColumns(text) {
+  const firstLine = String(text || "").split(/\r?\n/, 1)[0] || "";
+  return splitCsvLine(firstLine).filter((value) => value.length > 0);
+}
+
+function dictionaryDiagnostics(dictionaryText) {
+  if (!dictionaryText) return null;
+  const headers = headerColumns(dictionaryText);
+  if (!headers.length) return null;
+  const lower = headers.map((value) => value.toLowerCase());
+  // Report only columns that are genuinely unusable. A near-miss spelling is
+  // usable (and should be renamed for clarity); a completely absent column is a
+  // blocker. Reporting every non-exact header would be noisy and misleading.
+  const blockers = [];
+  const renamed = [];
+  for (const column of DICTIONARY_COLUMNS) {
+    const aliases = DICTIONARY_ALIASES[column];
+    if (aliases.some((alias) => lower.includes(alias))) continue;
+    const near = headers.filter((header) => aliases.some((alias) =>
+      header.toLowerCase().includes(alias.slice(0, 4)) || alias.includes(header.toLowerCase().slice(0, 4))));
+    if (near.length) renamed.push({ column, found: near });
+    else blockers.push(column);
+  }
+  if (!blockers.length && !renamed.length) return null;
+  const details = [
+    ...renamed.map((entry) => `${entry.column} (found "${entry.found.join(' / ')}" - rename it to "${entry.column}")`),
+    ...blockers.map((column) => `${column} (missing entirely)`),
+  ];
+  // Only the feature column decides whether anything imports; accept the same
+  // spellings the import loop accepts. "fatal" therefore means the import
+  // genuinely produced nothing, not merely that some column was absent.
+  const importsFeatures = lower.some((header) => DICTIONARY_ALIASES.feature.includes(header));
+  const fatal = !importsFeatures;
+  return {
+    headers,
+    fatal,
+    missing: [...renamed.map((entry) => entry.column), ...blockers],
+    renamed,
+    blockers,
+    unexpected: headers.filter((header) =>
+      !DICTIONARY_COLUMNS.some((column) => DICTIONARY_ALIASES[column].includes(header.toLowerCase()))),
+    message: `Feature dictionary was found but its column(s) could not be used as written: ` +
+      `${details.join(", ")}. Expected columns: ${DICTIONARY_COLUMNS.join(", ")}. File columns: ${headers.join(", ")}. ` +
+      (importsFeatures
+        ? "Features were imported; rename the column(s) above for clarity."
+        : "No usable feature column was found, so 0 feature(s) could be imported."),
+  };
+}
+
+// Pick the first populated cell among a column's accepted spellings. This keeps
+// the import loop consistent with the aliases dictionaryDiagnostics() treats as
+// acceptable, so a readable column is never reported as usable and then ignored.
+function pickColumn(row, aliases) {
+  for (const alias of aliases) {
+    const value = row[alias];
+    if (value !== undefined && value !== null && String(value).trim() !== "") return String(value).trim();
+  }
+  return "";
+}
+
 function dictionaryFeatures(dictionaryText, renameText, sourceRoot) {
   if (!dictionaryText) return {};
   const rename = new Map((renameText ? csvRows(renameText) : []).map((row) => [row.old, row.new]));
   const features = {};
   for (const row of csvRows(dictionaryText)) {
-    if (!row.feature) continue;
-    const name = rename.get(row.feature) || row.feature;
+    const rawName = pickColumn(row, DICTIONARY_ALIASES.feature);
+    if (!rawName) continue;
+    const name = rename.get(rawName) || rawName;
+    const unit = pickColumn(row, DICTIONARY_ALIASES.unit);
+    const group = pickColumn(row, DICTIONARY_ALIASES.group);
+    const source = pickColumn(row, DICTIONARY_ALIASES.source);
     features[name] = {
       name,
-      aliases: name === row.feature ? [] : [row.feature],
-      description: row.note || "",
-      ...(row.unit ? { unit: row.unit } : {}),
-      category: row.group || "",
-      source: { label: row.source || "", root: sourceRoot || "" },
+      aliases: name === rawName ? [] : [rawName],
+      description: pickColumn(row, DICTIONARY_ALIASES.note),
+      ...(unit ? { unit } : {}),
+      category: group,
+      source: { label: source, root: sourceRoot || "" },
       reviewStatus: "imported-documentation",
-      evidence: [{ kind: "feature-dictionary", feature: row.feature }],
+      evidence: [{ kind: "feature-dictionary", feature: rawName }],
     };
   }
   return features;
@@ -113,16 +208,31 @@ export function loadFeatureMetadata(runDirectory, explicitPath, options = {}) {
   const dictionaryFile = options.dictionaryFile ? path.resolve(options.dictionaryFile) : findFile(sourceRoot, "assb_features_feature_dictionary.csv");
   const renameMapFile = options.renameMapFile ? path.resolve(options.renameMapFile) : findFile(sourceRoot, "train_dat_rename_map.csv");
   let features = parseUnitManifest(options.unitManifestText);
+  let dictionaryProblem = null;
   if (dictionaryFile) {
+    const dictionaryText = fs.readFileSync(dictionaryFile, "utf8");
+    dictionaryProblem = dictionaryDiagnostics(dictionaryText);
     features = mergeRecords(features, dictionaryFeatures(
-      fs.readFileSync(dictionaryFile, "utf8"),
+      dictionaryText,
       renameMapFile ? fs.readFileSync(renameMapFile, "utf8") : null,
       sourceRoot,
     ));
   }
   let schemaVersion = null;
   if (file) {
-    const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+    const rawText = fs.readFileSync(file, "utf8");
+    let raw;
+    try {
+      raw = JSON.parse(rawText);
+    } catch (error) {
+      // The single most common mistake here is pointing --features at the CSV
+      // feature dictionary, which is read by --feature-dictionary instead.
+      const looksLikeCsv = /^\s*[^[{\r\n]+,[^\r\n]*$/m.test(rawText.split(/\r?\n/, 1)[0] || "");
+      const hint = looksLikeCsv
+        ? ` The file looks like CSV, not JSON. Feature dictionaries are passed with --feature-dictionary (or discovered via --source-root), while --features expects sage.features.json.`
+        : "";
+      throw new Error(`Feature metadata file is not valid JSON: ${path.basename(file)} (${error.message}).${hint}`);
+    }
     schemaVersion = raw.schemaVersion || null;
     features = mergeRecords(features, normalizeFeatureRecords(raw));
   }
@@ -131,13 +241,18 @@ export function loadFeatureMetadata(runDirectory, explicitPath, options = {}) {
   const resolvedStatuses = new Set(["confirmed", "imported-documentation"]);
   const resolved = runFeatures.filter((name) => resolvedStatuses.has(features[name]?.reviewStatus)).length;
   const warnings = [];
+  // A dictionary that was found but yielded nothing is far more likely to be a
+  // column-naming mistake than a deliberate empty file, so say so explicitly.
+  if (dictionaryProblem) warnings.push(dictionaryProblem.message);
   if (!file && !dictionaryFile && !Object.keys(parseUnitManifest(options.unitManifestText)).length) warnings.push("No feature metadata was found; physical interpretation is structure-only.");
-  else if (runFeatures.length && resolved < runFeatures.length) warnings.push(`${runFeatures.length - resolved} of ${runFeatures.length} feature(s) still need a user-confirmed explanation or source trace.`);
+  else if (!dictionaryProblem?.fatal && runFeatures.length && resolved < runFeatures.length) warnings.push(`${runFeatures.length - resolved} of ${runFeatures.length} feature(s) still need a user-confirmed explanation or source trace.`);
   return {
     file,
     sources: { featureMetadata: file, featureDictionary: dictionaryFile, renameMap: renameMapFile, sourceRoot, embeddedUnitManifest: !!options.unitManifestText },
     features,
     warnings,
+    dictionaryProblem,
+    expectedDictionaryColumns: DICTIONARY_COLUMNS,
     schemaVersion,
     resolvedFeatures: resolved,
     totalFeatures: runFeatures.length,

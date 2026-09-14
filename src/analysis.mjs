@@ -178,11 +178,19 @@ export function selectModels(result, summaries, options = {}) {
   }
   const competitive = scored.filter((item) => competitiveRanks.has(item.rank));
   const by = (items, key) => [...items].sort((a, b) => b._rawScores[key] - a._rawScores[key] || a.rank - b.rank);
+  // A "robustness" rank means two different things depending on the run, and
+  // conflating them invites over-reading. With a hold-out it is the relative
+  // train/verify gap. For MT-SISSO it is only how evenly the model fits across
+  // tasks - every number is in-sample, so it says nothing about external
+  // validity. Name the role for what it actually measures.
+  const multiTask = !!(result.meta?.tasks && result.meta.tasks.length > 1);
+  const hasHoldout = Core.availableDatasets(result).includes("verify");
+  const stabilityRole = multiTask && !hasHoldout ? "task-consistent" : "robust";
   const roles = [
     ["predictive", predictive],
     ["balanced", by(competitive, "balanced")[0]],
     ["interpretable", by(competitive, "interpretabilityEvidence")[0]],
-    ["robust", by(competitive, "robustness")[0]],
+    [stabilityRole, by(competitive, "robustness")[0]],
   ];
   const recommendations = new Map();
   for (const [role, item] of roles) {
@@ -202,6 +210,18 @@ export function selectModels(result, summaries, options = {}) {
       balancedWeights: { performance: 0.50, robustness: 0.20, interpretabilityEvidence: 0.30 },
       nearOptimalTolerance: tolerance,
       competitivePool: competitive.length,
+      // Expose what the stability score measures in this run, so a high score
+      // is not mistaken for external validation.
+      stability: {
+        role: stabilityRole,
+        basis: hasHoldout
+          ? "relative train/verify RMSE gap"
+          : "spread of per-task RMSE (all in-sample)",
+        externalValidation: hasHoldout,
+        note: hasHoldout
+          ? "Robust means the hold-out error is close to the training error."
+          : "No hold-out exists for this run. A high task-consistency score means the model fits every task about equally well; it is NOT evidence of generalisation.",
+      },
       note: "Recommendations are an auditable shortlist, not an automatic claim of physical truth. Review feature provenance and domain constraints before acceptance.",
     },
     paretoFront: pareto.front,

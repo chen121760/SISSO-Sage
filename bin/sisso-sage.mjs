@@ -9,6 +9,7 @@ import {
   comparisonResult,
   featureContextResult,
   inspectionResult,
+  leakageResult,
   listModelsResult,
   modelResult,
 } from "../src/service.mjs";
@@ -29,7 +30,34 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  return `SISSO-Sage — AI-ready SISSO analysis\n\nUsage:\n  sisso-sage inspect <run-dir|run.tar.gz> [--features metadata.json] [--verify verify.dat]\n  sisso-sage models <run> [--limit 20] [--sort verify.rmse] [--feature name]\n  sisso-sage model <run> --rank 1\n  sisso-sage compare <run> --ranks 1,2,3\n  sisso-sage pareto <run> [--dataset verify] [--metric rmse]\n  sisso-sage select <run> [--limit 5] [--dataset verify] [--metric rmse]\n  sisso-sage bundle <run> --output analysis.bundle.json\n  sisso-sage metadata-template <run> [--output sage.features.json]\n  sisso-sage feature-doc <run> [--output FEATURES.md]\n  sisso-sage feature-context <run> --feature name --source-root /path/to/source\n  sisso-sage capabilities\n\nMetadata options:\n  --source-root <dir>          Auto-find feature dictionary and rename map\n  --feature-dictionary <csv>  Explicit feature dictionary\n  --rename-map <csv>          Old-to-new feature-name mapping\n\nAll data commands emit JSON. Use --compact for token-efficient output.`;
+  return `SISSO-Sage — AI-ready SISSO analysis
+
+Usage:
+  sisso-sage inspect <run-dir|run.tar.gz> [--features sage.features.json] [--verify verify.dat]
+  sisso-sage leakage <run> [--verify verify.dat]
+  sisso-sage models <run> [--limit 20] [--sort verify.rmse] [--feature name]
+  sisso-sage model <run> --rank 1
+  sisso-sage compare <run> --ranks 1,2,3
+  sisso-sage pareto <run> [--dataset verify] [--metric rmse]
+  sisso-sage select <run> [--limit 5] [--dataset verify] [--metric rmse]
+  sisso-sage bundle <run> --output analysis.bundle.json
+  sisso-sage metadata-template <run> [--output sage.features.json]
+  sisso-sage feature-doc <run> [--output FEATURES.md]
+  sisso-sage feature-context <run> --feature name --source-root /path/to/source
+  sisso-sage capabilities
+
+Metadata options:
+  --features <json>            Explicit sage.features.json (JSON, not CSV)
+  --source-root <dir>          Auto-find feature dictionary and rename map
+  --feature-dictionary <csv>   Explicit feature dictionary CSV; readable columns:
+                               feature, note, unit, group, source
+  --rename-map <csv>           Old-to-new feature-name mapping; columns: old, new
+
+Notes:
+  --limit accepts any positive integer (hard cap 100000). Responses carry
+  "returned", "limit" and "truncated" so a truncated list is never silent.
+
+All data commands emit JSON. Use --compact for token-efficient output.`;
 }
 
 function printJson(value, compact = false) {
@@ -81,6 +109,10 @@ async function main() {
 
   if (command === "inspect") {
     printJson(inspectionResult(analysis), options.compact);
+    return;
+  }
+  if (command === "leakage") {
+    printJson(leakageResult(analysis), options.compact);
     return;
   }
   if (command === "models") {

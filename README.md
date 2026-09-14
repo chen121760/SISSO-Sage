@@ -83,11 +83,12 @@ that is a separate deployment mode from the privacy-preserving local server.
 | Command | Result |
 |---|---|
 | `inspect` | Files, task layout, datasets, health checks, and metadata coverage |
-| `models` | Sortable/filterable compact model records |
+| `leakage` | Whether held-out rows are genuinely unseen, before you trust a hold-out metric |
+| `models` | Sortable/filterable compact model records; reports truncation explicitly |
 | `model` | One model's formulas, descriptors, metrics, risks, and provenance |
 | `compare` | Aligned evidence for two or more ranks |
 | `pareto` | Prediction metric versus descriptor-dimension Pareto front |
-| `select` | Predictive, balanced, interpretable, and robust candidates |
+| `select` | Predictive, balanced, interpretable, and stable candidates |
 | `bundle` | Complete versioned JSON artifact for an AI workflow |
 | `metadata-template` | A provenance template covering all primitive features |
 | `feature-doc` | A Markdown feature dictionary with unresolved names clearly flagged |
@@ -97,6 +98,7 @@ that is a separate deployment mode from the privacy-preserving local server.
 Examples:
 
 ```bash
+node bin/sisso-sage.mjs leakage run.tar.gz --verify verify.dat
 node bin/sisso-sage.mjs models RUN --sort verify.rmse --limit 10
 node bin/sisso-sage.mjs models RUN --feature band_gap
 node bin/sisso-sage.mjs pareto RUN --dataset verify --metric rmse
@@ -104,6 +106,36 @@ node bin/sisso-sage.mjs model RUN --rank 7 --features RUN/sage.features.json
 node bin/sisso-sage.mjs feature-doc run.tar.gz --source-root /path/to/feature-extraction --output FEATURES.md
 node bin/sisso-sage.mjs feature-context run.tar.gz --feature packing_fraction --source-root /path/to/feature-extraction
 ```
+
+### Reading `--limit`
+
+`models --limit N` accepts any positive integer (hard cap 100000) and reports
+`total`, `returned`, `limit` and `truncated`. A truncated list always says so, so
+"the best model by verify RMSE" cannot be computed from a silently shortened
+ranking.
+
+## Hold-out independence
+
+A hold-out metric is only evidence if the held-out rows are genuinely unseen.
+`leakage` compares `verify.dat` against `train.dat` in three widening steps -
+exact sample name, then structure id, then composition - and separately flags
+rows that are the *same observation* (same sample name, target and condition),
+which is unambiguous leakage.
+
+```bash
+node bin/sisso-sage.mjs leakage run.tar.gz --verify verify.dat
+```
+
+`verdict: disjoint` means no overlap was found. `leaked-identical-rows` means the
+hold-out contains rows that were fitted, and `holdoutIsIndependent` is `false`:
+report those metrics as in-sample, not as generalisation. `shared-structure-ids`
+and `shared-compositions` are weaker warnings - the split is clean at row level
+but measures interpolation within known structures or chemistries.
+
+For MT-SISSO, which has no `verify.dat`, the check compares the task partitions
+instead. This is how a run accidentally including held-out data in a training
+task is caught. It is a common and silent mistake: two runs can look like two
+independent experiments while actually sharing one split.
 
 ## Feature provenance
 
@@ -126,6 +158,21 @@ merge them with an archived `unit_manifest.txt`:
 node bin/sisso-sage.mjs inspect RUN --source-root /path/to/feature-extraction
 ```
 
+The dictionary is read with these columns (common aliases such as `feature_name`,
+`description`, `category` and `source_file` are also accepted):
+
+| Column | Meaning |
+|---|---|
+| `feature` | Primitive feature name, matching the run's columns |
+| `note` | What the feature measures |
+| `unit` | Physical unit |
+| `group` | Category used for grouping and reporting |
+| `source` | File and function that computes it |
+
+A dictionary whose columns cannot be used is reported as a warning rather than
+being read as an empty dictionary, so a naming mistake never looks like
+"no provenance supplied".
+
 Metadata has an explicit review state. Ambiguous names stay
 `needs-user-confirmation`; AI-authored definitions should use `ai-draft`; only a
 researcher-reviewed entry should become `confirmed`. The original extraction
@@ -141,12 +188,30 @@ returns several roles rather than presenting one unquestionable winner:
 - predictive best;
 - balanced Pareto candidate;
 - most interpretable candidate on the Pareto front;
-- most stable candidate across train/verify or tasks;
+- most stable candidate — `robust` when a hold-out exists (small train/verify
+  gap), or `task-consistent` for MT-SISSO (even fit across tasks, all in-sample);
 - additional Pareto alternatives.
+
+The distinction matters: for MT-SISSO every number is in-sample, so a high
+task-consistency score says the model fits each task about equally well and
+nothing about generalisation. `methodology.stability` states the basis, whether
+external validation applies, and that caveat in the output itself.
 
 The balanced score is fully disclosed in the JSON. Physical interpretation
 still requires checking feature provenance, units, constraints, data leakage,
 and the scientific domain.
+
+Two heuristics are deliberately narrow and should not be over-read:
+
+- A `singularity` risk is raised by the *presence of division or a negative
+  power in the descriptor text*, not by inspecting data values. The scoring code
+  cannot see the numbers, so a denominator that is physically or structurally
+  bounded away from zero (for example a Kelvin temperature, or an integer count
+  of coordination environments that is >= 1 by construction) is still flagged.
+  Confirm the real domain in your data before rejecting a model over this flag.
+- Coefficient differences between MT-SISSO tasks are the intended output of the
+  method - they describe what distinguishes the task families - and are not used
+  by any score here.
 
 ## Development
 

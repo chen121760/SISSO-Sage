@@ -10,10 +10,12 @@ import {
   comparisonResult,
   featureContextResult,
   inspectionResult,
+  leakageResult,
   listModelsResult,
   modelResult,
   paretoResult,
   selectionResult,
+  MODEL_LIST_HARD_CAP,
 } from "../src/service.mjs";
 import { VERSION } from "../src/version.mjs";
 
@@ -40,12 +42,16 @@ function resultMessage(result) {
   if (result.kind === "sisso-sage-inspection") {
     return `Inspected SISSO run: health=${result.health?.level || "unknown"}, models=${result.run?.nModels ?? "unknown"}, metadata=${result.featureMetadata?.resolvedFeatures ?? 0}/${result.featureMetadata?.totalFeatures ?? 0}.`;
   }
-  if (result.kind === "sisso-sage-model-list") return `Returned ${result.returned} of ${result.total} matching models.`;
+  if (result.kind === "sisso-sage-model-list") return `Returned ${result.returned} of ${result.total} matching models${result.truncated ? " (truncated)" : ""}.`;
   if (result.kind === "sisso-sage-model") return `Returned evidence for model rank ${result.model.rank}.`;
   if (result.kind === "sisso-sage-comparison") return `Compared model ranks ${result.ranks.join(", ")}.`;
   if (result.kind === "sisso-sage-pareto") return `Returned ${result.front.length} Pareto-front models from ${result.eligibleModels} eligible models.`;
   if (result.kind === "sisso-sage-selection") return `Returned ${result.recommendations.length} auditable model candidates.`;
   if (result.kind === "sisso-sage-feature-context") return `Feature source trace status: ${result.status}.`;
+  if (result.kind === "sisso-sage-leakage") {
+    return `Leakage check (${result.mode}): verdict=${result.verdict}` +
+      (result.holdoutIsIndependent === false ? " — hold-out is NOT independent." : "") + ".";
+  }
   return "SISSO-Sage tool completed.";
 }
 
@@ -97,12 +103,18 @@ export function createSissoSageMcpServer(options = {}) {
     inputSchema: runInput,
   }, (input) => inspectionResult(cache.load(input.run, input)));
 
+  registerReadTool(server, "check_leakage", {
+    title: "Check hold-out independence",
+    description: "Verify that held-out rows are genuinely unseen before trusting any hold-out metric. Compares verify.dat against train.dat by exact sample name, then structure id, then composition, and flags identical sample+condition rows (true leakage). For MT-SISSO without verify.dat it compares the task partitions instead. Read-only and descriptive.",
+    inputSchema: runInput,
+  }, (input) => leakageResult(cache.load(input.run, input)));
+
   registerReadTool(server, "list_models", {
     title: "List SISSO models",
-    description: "List a bounded set of model evidence records, optionally sorted by a dataset metric or filtered by primitive feature.",
+    description: "List model evidence records, optionally sorted by a dataset metric or filtered by primitive feature. Use limit to page through every model; the response reports returned/limit/truncated so a partial list is never mistaken for the full ranking.",
     inputSchema: {
       ...runInput,
-      limit: z.number().int().min(1).max(100).optional(),
+      limit: z.number().int().min(1).max(MODEL_LIST_HARD_CAP).optional(),
       sort: z.string().optional().describe("rank, interpretability, or dataset.metric such as verify.rmse or t1.rmse."),
       feature: z.string().optional().describe("Only return models using this exact primitive feature name."),
     },

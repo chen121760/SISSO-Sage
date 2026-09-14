@@ -8,7 +8,18 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { analyzeDirectory, buildBundle, paretoModels, readTarEntries, selectModels, traceFeatureSource } from "../src/index.mjs";
+import {
+  analyzeDirectory,
+  buildBundle,
+  listModelsResult,
+  paretoModels,
+  readTarEntries,
+  resolveModelLimit,
+  selectModels,
+  traceFeatureSource,
+  MODEL_LIST_HARD_CAP,
+} from "../src/index.mjs";
+import { leakageReport, sampleKeys } from "../src/leakage.mjs";
 import { createSissoSageMcpServer } from "../mcp/server.mjs";
 
 function tinyTar(name, content) {
@@ -25,8 +36,10 @@ function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sisso-sage-"));
   fs.mkdirSync(path.join(root, "Models"));
   fs.mkdirSync(path.join(root, "SIS_subspaces"));
-  fs.writeFileSync(path.join(root, "train.dat"), "name target f1 f2\ns1 1 1 4\ns2 2 2 3\ns3 3 3 2\ns4 4 4 1\n");
-  fs.writeFileSync(path.join(root, "verify.dat"), "name target f1 f2\nv1 5 5 0\nv2 6 6 -1\n");
+  // Names carry an id and a composition, as real SISSO exports do, so the
+  // leakage hierarchy (name -> id -> formula) is actually exercised.
+  fs.writeFileSync(path.join(root, "train.dat"), "name target f1 f2\naaa_CA1 1 1 4\naaa_CA1b 2 2 3\nbbb_CA2 3 3 2\nccc_CA3 4 4 1\n");
+  fs.writeFileSync(path.join(root, "verify.dat"), "name target f1 f2\nxxx_CA9 5 5 0\nyyy_CA8 6 6 -1\n");
   fs.writeFileSync(path.join(root, "Models", "top0003_D001"), "Rank RMSE MaxAE Feature_ID\n1 0.0 0.0 ( 1)\n2 1.0 2.0 ( 2)\n3 0.5 1.0 ( 3)\n");
   fs.writeFileSync(path.join(root, "Models", "top0003_D001_coeff"), "Model_ID c0 c1\n1 0 1\n2 5 -1\n3 0 0.8\n");
   fs.writeFileSync(path.join(root, "SIS_subspaces", "Uspace.expressions"), "(f1) SIS_score = 1\n(f2) SIS_score = 0.8\n(f1/f2) SIS_score = 0.7\n");
@@ -36,6 +49,38 @@ function fixture() {
   }}));
   fs.writeFileSync(path.join(root, "features.py"), "def compute_f1(structure):\n    return structure.value  # f1\n");
   return root;
+}
+
+// A run large enough that a silent list cap would be observable.
+function manyModelFixture(count = 25) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sisso-sage-many-"));
+  fs.mkdirSync(path.join(root, "Models"));
+  fs.mkdirSync(path.join(root, "SIS_subspaces"));
+  const train = ["name target f1 f2"];
+  const verify = ["name target f1 f2"];
+  for (let i = 1; i <= 5; i++) {
+    train.push(`t${i} ${i} ${i} ${6 - i}`);
+    verify.push(`v${i} ${i + 10} ${i + 5} ${i}`);
+  }
+  fs.writeFileSync(path.join(root, "train.dat"), `${train.join("\n")}\n`);
+  fs.writeFileSync(path.join(root, "verify.dat"), `${verify.join("\n")}\n`);
+  const top = ["Rank RMSE MaxAE Feature_ID"];
+  const coeff = ["Model_ID c0 c1"];
+  for (let r = 1; r <= count; r++) {
+    const descriptor = (r % 2) + 1;
+    const rmse = (0.1 + r * 0.01).toFixed(3);
+    top.push(`${r} ${rmse} 1.0 ( ${descriptor})`);
+    coeff.push(`${r} 0 ${(1 / r).toExponential(6)}`);
+  }
+  fs.writeFileSync(path.join(root, "Models", "top9999_D001"), `${top.join("\n")}\n`);
+  fs.writeFileSync(path.join(root, "Models", "top9999_D001_coeff"), `${coeff.join("\n")}\n`);
+  fs.writeFileSync(path.join(root, "SIS_subspaces", "Uspace.expressions"), "(f1) SIS_score = 1\n(f2) SIS_score = 0.9\n");
+  return root;
+}
+
+function writeDictionary(root, name, text) {
+  fs.writeFileSync(path.join(root, name), text);
+  return path.join(root, name);
 }
 
 test("analyzes a directory into AI-readable model evidence", () => {
@@ -62,6 +107,9 @@ test("builds Pareto and multi-role recommendations", () => {
     const selection = selectModels(analysis.result, analysis.summaries, { limit: 4 });
     assert.ok(selection.recommendations.length >= 1);
     assert.ok(selection.recommendations.some((item) => item.roles.includes("predictive")));
+    // With a hold-out present the stability score really is a train/verify gap.
+    assert.equal(selection.methodology.stability.role, "robust");
+    assert.equal(selection.methodology.stability.externalValidation, true);
     const bundle = buildBundle(analysis);
     assert.equal(bundle.schemaVersion, "1.0.0");
     assert.equal(bundle.models.length, 3);
@@ -75,7 +123,7 @@ test("CLI inspection, Pareto, and selection emit valid JSON", () => {
   const root = fixture();
   const cli = path.resolve("bin", "sisso-sage.mjs");
   try {
-    for (const command of ["inspect", "pareto", "select"]) {
+    for (const command of ["inspect", "pareto", "select", "leakage"]) {
       const run = spawnSync(process.execPath, [cli, command, root, "--compact"], { encoding: "utf8" });
       assert.equal(run.status, 0, run.stderr);
       const output = JSON.parse(run.stdout);
@@ -84,6 +132,7 @@ test("CLI inspection, Pareto, and selection emit valid JSON", () => {
         assert.equal(output.evaluation.dataset, "verify");
         assert.ok(output.front.length > 0);
       }
+      if (command === "leakage") assert.equal(output.verdict, "disjoint");
     }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
@@ -116,6 +165,133 @@ test("reads gzip-compressed TAR entries without extracting them", () => {
   }
 });
 
+test("model list honours --limit and reports truncation instead of hiding it", () => {
+  const root = manyModelFixture(25);
+  try {
+    const analysis = analyzeDirectory(root);
+
+    const all = listModelsResult(analysis, { limit: 1000 });
+    assert.equal(all.total, 25);
+    assert.equal(all.returned, 25, "limit above the run size must return every model");
+    assert.equal(all.truncated, false);
+
+    const partial = listModelsResult(analysis, { limit: 10 });
+    assert.equal(partial.returned, 10);
+    assert.equal(partial.limit, 10);
+    assert.equal(partial.truncated, true, "a partial list must be flagged");
+
+    // The old implementation clamped to 100 and silently dropped the tail.
+    assert.ok(resolveModelLimit(1000) > 100, "the 100-model cap must be gone");
+    assert.equal(resolveModelLimit(1e12), MODEL_LIST_HARD_CAP);
+    assert.equal(resolveModelLimit(undefined), 20, "default stays 20");
+    assert.equal(resolveModelLimit(0), 1, "degenerate limits clamp to 1");
+
+    // Sorting by a metric over the FULL list, which is what the cap corrupted.
+    const sorted = listModelsResult(analysis, { limit: 1000, sort: "verify.rmse" });
+    const rmse = sorted.models.map((model) => model.metrics.verify.rmse);
+    assert.deepEqual(rmse, [...rmse].sort((a, b) => a - b), "the best model must be first over all 25");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("detects a verify.dat that reuses training samples", () => {
+  const root = fixture();
+  try {
+    // Identical row: the same sample name AND the same values as a fitted row.
+    fs.writeFileSync(path.join(root, "verify.dat"), "name target f1 f2\naaa_CA1 1 1 4\nzzz_CA7 6 6 -1\n");
+    const leaked = leakageReport(analyzeDirectory(root));
+    assert.equal(leaked.verdict, "leaked-identical-rows");
+    assert.equal(leaked.holdoutIsIndependent, false);
+    assert.equal(leaked.comparisons[0].duplicateObservations.count, 1);
+    assert.match(leaked.comparisons[0].note, /same sample name, target and condition/i);
+
+    // Same structure id, different condition: a weaker but real warning.
+    fs.writeFileSync(path.join(root, "verify.dat"), "name target f1 f2\naaa_CA4 7 7 2\nzzz_CA7 6 6 -1\n");
+    const sharedId = leakageReport(analyzeDirectory(root));
+    assert.equal(sharedId.verdict, "shared-structure-ids");
+    assert.equal(sharedId.comparisons[0].duplicateObservations.count, 0);
+    assert.match(sharedId.comparisons[0].note, /interpolation on known structures/);
+
+    // Shared composition only.
+    fs.writeFileSync(path.join(root, "verify.dat"), "name target f1 f2\nddd_CA1 7 7 2\nzzz_CA7 6 6 -1\n");
+    const sharedFormula = leakageReport(analyzeDirectory(root));
+    assert.equal(sharedFormula.verdict, "shared-compositions");
+    assert.equal(sharedFormula.holdoutIsIndependent, null);
+
+    // Disjoint: the clean case.
+    fs.writeFileSync(path.join(root, "verify.dat"), "name target f1 f2\nxxx_CA9 5 5 0\nyyy_CA8 6 6 -1\n");
+    const clean = leakageReport(analyzeDirectory(root));
+    assert.equal(clean.verdict, "disjoint");
+    assert.equal(clean.mode, "train-vs-verify");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("sample keys fall back gracefully for names without a separator", () => {
+  assert.deepEqual(sampleKeys("mp1234").map((key) => key.kind), ["name"]);
+  assert.deepEqual(sampleKeys("14120eb0_B4Li20O64S16").map((key) => key.kind), ["name", "id", "formula"]);
+  assert.deepEqual(sampleKeys(""), []);
+});
+
+test("an unrecognised feature-dictionary header is reported, not silently ignored", () => {
+  const root = fixture();
+  try {
+    // Common aliases import cleanly and produce no diagnostic.
+    const aliased = writeDictionary(root, "aliased.csv",
+      "feature_name,description,unit,category,source_file\nf1,Primary,eV,geometry,features.py\nf2,Secondary,eV,geometry,features.py\n");
+    const aliasedResult = analyzeDirectory(root, { dictionaryFile: aliased });
+    assert.equal(aliasedResult.featureMetadata.resolvedFeatures, 2, "aliased columns must import");
+    assert.equal(aliasedResult.featureMetadata.dictionaryProblem, null);
+    assert.equal(aliasedResult.featureMetadata.features.f1.unit, "eV");
+    assert.equal(aliasedResult.featureMetadata.features.f1.category, "geometry");
+    assert.equal(aliasedResult.featureMetadata.features.f1.source.label, "features.py");
+
+    // A missing optional column still imports, but the gap is reported.
+    const partial = writeDictionary(root, "partial.csv", "feature,unit\nf1,eV\nf2,eV\n");
+    const partialResult = analyzeDirectory(root, { dictionaryFile: partial });
+    assert.equal(partialResult.featureMetadata.resolvedFeatures, 2);
+    assert.equal(partialResult.featureMetadata.dictionaryProblem.fatal, false);
+    assert.match(partialResult.featureMetadata.dictionaryProblem.message, /Features were imported/);
+    assert.match(partialResult.featureMetadata.dictionaryProblem.message, /note \(missing entirely\)/);
+
+    // No feature-bearing column at all: nothing can be imported, and it is fatal.
+    const broken = writeDictionary(root, "broken.csv",
+      "name_x,description_x\nf1,Primary\nf2,Secondary\n");
+    const brokenResult = analyzeDirectory(root, { dictionaryFile: broken });
+    assert.equal(brokenResult.featureMetadata.resolvedFeatures, 0);
+    assert.ok(brokenResult.featureMetadata.dictionaryProblem, "the column mismatch must be reported");
+    assert.equal(brokenResult.featureMetadata.dictionaryProblem.fatal, true);
+    assert.match(brokenResult.featureMetadata.warnings.join(" "), /Feature dictionary was found/);
+    assert.match(brokenResult.featureMetadata.warnings.join(" "), /No usable feature column was found/);
+    assert.match(brokenResult.featureMetadata.warnings.join(" "), /unit \(missing entirely\)/);
+
+    // The documented column names produce no diagnostic at all.
+    const good = writeDictionary(root, "assb_features_feature_dictionary.csv",
+      "feature,note,unit,group,source\nf1,Primary measurement,eV,geometry,features.py :: compute_f1\nf2,Secondary measurement,eV,geometry,features.py :: compute_f2\n");
+    const working = analyzeDirectory(root, { dictionaryFile: good });
+    assert.equal(working.featureMetadata.dictionaryProblem, null);
+    assert.equal(working.featureMetadata.resolvedFeatures, 2);
+    assert.deepEqual(working.featureMetadata.expectedDictionaryColumns, ["feature", "note", "unit", "group", "source"]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a CSV passed to --features produces an actionable error", () => {
+  const root = fixture();
+  try {
+    const dictionary = writeDictionary(root, "dict.csv", "feature,note\nf1,Primary\n");
+    assert.throws(
+      () => analyzeDirectory(root, { featuresFile: dictionary }),
+      /not valid JSON[\s\S]*--feature-dictionary/,
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("MCP client discovers and calls the read-only SISSO tools", async () => {
   const root = fixture();
   const server = createSissoSageMcpServer();
@@ -130,6 +306,7 @@ test("MCP client discovers and calls the read-only SISSO tools", async () => {
     assert.deepEqual(names, [
       "get_capabilities",
       "inspect_run",
+      "check_leakage",
       "list_models",
       "get_model",
       "compare_models",
@@ -143,6 +320,10 @@ test("MCP client discovers and calls the read-only SISSO tools", async () => {
     assert.equal(inspected.isError, undefined);
     assert.equal(inspected.structuredContent.result.health.level, "pass");
     assert.equal(inspected.structuredContent.result.run.nModels, 3);
+
+    const leakage = await client.callTool({ name: "check_leakage", arguments: { run: root } });
+    assert.equal(leakage.isError, undefined);
+    assert.equal(leakage.structuredContent.result.verdict, "disjoint");
 
     const selected = await client.callTool({ name: "select_candidates", arguments: { run: root, limit: 4 } });
     assert.equal(selected.structuredContent.result.evaluation.dataset, "verify");
@@ -170,6 +351,7 @@ test("bundled MCP stdio entrypoint completes a real handshake", async () => {
     await client.connect(transport);
     const listed = await client.listTools();
     assert.ok(listed.tools.some((tool) => tool.name === "inspect_run"));
+    assert.ok(listed.tools.some((tool) => tool.name === "check_leakage"), "the bundle must include the new tool");
   } finally {
     await client.close();
   }

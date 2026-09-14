@@ -9167,7 +9167,7 @@ var require_health_check = __commonJS({
         if (s.length > max) s = s.slice(0, max - 1) + "\u2026";
         return s;
       }
-      function firstFew(arr, k) {
+      function firstFew2(arr, k) {
         k = k || 3;
         var out = [];
         for (var i = 0; i < arr.length && out.length < k; i++) out.push(arr[i]);
@@ -9223,7 +9223,7 @@ var require_health_check = __commonJS({
           addWarn(
             report,
             prefix + "-duplicates",
-            fileLabel + " has duplicate sample name(s): " + firstFew(dups).join(", ") + (dups.length > 3 ? " \u2026" : "") + " (rows may be ambiguous in plots)."
+            fileLabel + " has duplicate sample name(s): " + firstFew2(dups).join(", ") + (dups.length > 3 ? " \u2026" : "") + " (rows may be ambiguous in plots)."
           );
         } else {
           addPass(report, prefix + "-duplicates", "No duplicate sample names in " + fileLabel + ".");
@@ -9344,7 +9344,7 @@ var require_health_check = __commonJS({
           addErr(
             report,
             "models",
-            "Descriptor reference(s) " + firstFew(missingIds).join(", ") + (missingIds.length > 3 ? " \u2026" : "") + " point to features missing from Uspace.expressions (file defines " + uspace.totalFeatures + ")."
+            "Descriptor reference(s) " + firstFew2(missingIds).join(", ") + (missingIds.length > 3 ? " \u2026" : "") + " point to features missing from Uspace.expressions (file defines " + uspace.totalFeatures + ")."
           );
           return;
         }
@@ -9530,7 +9530,7 @@ var require_health_check = __commonJS({
           }
         }
         if (offending.length) {
-          var parts = firstFew(offending, 3).map(function(o) {
+          var parts = firstFew2(offending, 3).map(function(o) {
             return "#" + o.id + ' "' + shortExpr(o.expr) + '" (' + o.bad + "/" + o.rows + " rows)";
           });
           addWarn(
@@ -38891,7 +38891,7 @@ var StdioServerTransport = class {
 };
 
 // src/version.mjs
-var VERSION = "0.2.0";
+var VERSION = "0.3.0";
 
 // src/capabilities.mjs
 var CAPABILITIES = {
@@ -38900,11 +38900,12 @@ var CAPABILITIES = {
   purpose: "Transform SISSO results into compact, auditable evidence that an AI can query before recommending models.",
   commands: {
     inspect: "Validate a SISSO run and return its manifest.",
-    models: "List compact model summaries with filtering and sorting.",
+    leakage: "Check whether held-out rows are genuinely unseen before trusting hold-out metrics.",
+    models: "List compact model summaries with filtering and sorting; reports truncation explicitly.",
     model: "Return the full evidence record for one ranked model.",
     compare: "Return aligned evidence records for selected model ranks.",
     pareto: "Return the prediction-error versus descriptor-complexity Pareto front.",
-    select: "Create a multi-role shortlist: predictive, balanced, interpretable, and robust.",
+    select: "Create a multi-role shortlist: predictive, balanced, interpretable, and stable.",
     bundle: "Write the complete AI-readable analysis bundle.",
     "metadata-template": "Create a feature-provenance template for the run.",
     "feature-doc": "Write a reviewable Markdown feature dictionary and flag unresolved names.",
@@ -38913,19 +38914,27 @@ var CAPABILITIES = {
   mcpTools: {
     get_capabilities: "Discover the MCP workflow and decision policy.",
     inspect_run: "Validate a run before analysis.",
-    list_models: "Query a bounded, sortable model list.",
+    check_leakage: "Verify hold-out independence (identical rows, shared structure ids, shared compositions).",
+    list_models: "Query a sortable model list; returned/limit/truncated make a partial list explicit.",
     get_model: "Retrieve the full evidence record for one rank.",
     compare_models: "Compare two to ten finalist ranks.",
     pareto_frontier: "Query the performance-complexity frontier.",
     select_candidates: "Create a multi-role candidate shortlist.",
     feature_context: "Trace one exact primitive feature into extraction sources."
   },
+  dictionaryColumns: {
+    featureDictionary: ["feature", "note", "unit", "group", "source"],
+    renameMap: ["old", "new"]
+  },
   decisionPolicy: [
     "Use deterministic metrics and validation results as evidence.",
+    "Check hold-out independence before quoting any hold-out metric as generalisation.",
     "Treat interpretability scores as transparent heuristics, never proof of physical meaning.",
     "Prefer a shortlist over a single winner.",
     "Require human review of provenance, units, constraints, and extrapolation risks.",
-    "Mark ambiguous feature meanings as unresolved instead of inferring them from names alone."
+    "Mark ambiguous feature meanings as unresolved instead of inferring them from names alone.",
+    "A flagged singularity risk is a textual heuristic about division or negative powers; confirm with the real data domain before rejecting or accepting a model.",
+    "Coefficient differences between MT-SISSO tasks are the method's intended output, not a defect."
   ]
 };
 
@@ -39194,6 +39203,27 @@ function normalizeFeatureRecords(raw) {
   if (!source || typeof source !== "object") throw new Error("Feature metadata must contain an object or array of features.");
   return Object.fromEntries(Object.entries(source).map(([name, value]) => [name, { name, ...value || {} }]));
 }
+function splitCsvLine(line) {
+  const fields = [];
+  let field = "", quoted = false;
+  const text = String(line || "");
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (quoted) {
+      if (char === '"' && text[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (char === '"') quoted = false;
+      else field += char;
+    } else if (char === '"') quoted = true;
+    else if (char === ",") {
+      fields.push(field);
+      field = "";
+    } else field += char;
+  }
+  fields.push(field.replace(/\r$/, ""));
+  return fields.map((value) => value.trim());
+}
 function csvRows(text) {
   const rows = [];
   let row = [], field = "", quoted = false;
@@ -39274,22 +39304,76 @@ function parseUnitManifest(text) {
   });
   return features;
 }
+var DICTIONARY_COLUMNS = ["feature", "note", "unit", "group", "source"];
+var DICTIONARY_ALIASES = {
+  feature: ["feature", "feature_name", "name", "feature_id"],
+  note: ["note", "description", "desc", "meaning"],
+  unit: ["unit", "units"],
+  group: ["group", "category", "family", "class"],
+  source: ["source", "source_file", "provenance", "file"]
+};
+function headerColumns(text) {
+  const firstLine = String(text || "").split(/\r?\n/, 1)[0] || "";
+  return splitCsvLine(firstLine).filter((value) => value.length > 0);
+}
+function dictionaryDiagnostics(dictionaryText) {
+  if (!dictionaryText) return null;
+  const headers = headerColumns(dictionaryText);
+  if (!headers.length) return null;
+  const lower = headers.map((value) => value.toLowerCase());
+  const blockers = [];
+  const renamed = [];
+  for (const column of DICTIONARY_COLUMNS) {
+    const aliases = DICTIONARY_ALIASES[column];
+    if (aliases.some((alias) => lower.includes(alias))) continue;
+    const near = headers.filter((header) => aliases.some((alias) => header.toLowerCase().includes(alias.slice(0, 4)) || alias.includes(header.toLowerCase().slice(0, 4))));
+    if (near.length) renamed.push({ column, found: near });
+    else blockers.push(column);
+  }
+  if (!blockers.length && !renamed.length) return null;
+  const details = [
+    ...renamed.map((entry) => `${entry.column} (found "${entry.found.join(" / ")}" - rename it to "${entry.column}")`),
+    ...blockers.map((column) => `${column} (missing entirely)`)
+  ];
+  const importsFeatures = lower.some((header) => DICTIONARY_ALIASES.feature.includes(header));
+  const fatal = !importsFeatures;
+  return {
+    headers,
+    fatal,
+    missing: [...renamed.map((entry) => entry.column), ...blockers],
+    renamed,
+    blockers,
+    unexpected: headers.filter((header) => !DICTIONARY_COLUMNS.some((column) => DICTIONARY_ALIASES[column].includes(header.toLowerCase()))),
+    message: `Feature dictionary was found but its column(s) could not be used as written: ${details.join(", ")}. Expected columns: ${DICTIONARY_COLUMNS.join(", ")}. File columns: ${headers.join(", ")}. ` + (importsFeatures ? "Features were imported; rename the column(s) above for clarity." : "No usable feature column was found, so 0 feature(s) could be imported.")
+  };
+}
+function pickColumn(row, aliases) {
+  for (const alias of aliases) {
+    const value = row[alias];
+    if (value !== void 0 && value !== null && String(value).trim() !== "") return String(value).trim();
+  }
+  return "";
+}
 function dictionaryFeatures(dictionaryText, renameText, sourceRoot) {
   if (!dictionaryText) return {};
   const rename = new Map((renameText ? csvRows(renameText) : []).map((row) => [row.old, row.new]));
   const features = {};
   for (const row of csvRows(dictionaryText)) {
-    if (!row.feature) continue;
-    const name = rename.get(row.feature) || row.feature;
+    const rawName = pickColumn(row, DICTIONARY_ALIASES.feature);
+    if (!rawName) continue;
+    const name = rename.get(rawName) || rawName;
+    const unit = pickColumn(row, DICTIONARY_ALIASES.unit);
+    const group = pickColumn(row, DICTIONARY_ALIASES.group);
+    const source = pickColumn(row, DICTIONARY_ALIASES.source);
     features[name] = {
       name,
-      aliases: name === row.feature ? [] : [row.feature],
-      description: row.note || "",
-      ...row.unit ? { unit: row.unit } : {},
-      category: row.group || "",
-      source: { label: row.source || "", root: sourceRoot || "" },
+      aliases: name === rawName ? [] : [rawName],
+      description: pickColumn(row, DICTIONARY_ALIASES.note),
+      ...unit ? { unit } : {},
+      category: group,
+      source: { label: source, root: sourceRoot || "" },
       reviewStatus: "imported-documentation",
-      evidence: [{ kind: "feature-dictionary", feature: row.feature }]
+      evidence: [{ kind: "feature-dictionary", feature: rawName }]
     };
   }
   return features;
@@ -39313,16 +39397,27 @@ function loadFeatureMetadata(runDirectory, explicitPath, options = {}) {
   const dictionaryFile = options.dictionaryFile ? path2.resolve(options.dictionaryFile) : findFile(sourceRoot, "assb_features_feature_dictionary.csv");
   const renameMapFile = options.renameMapFile ? path2.resolve(options.renameMapFile) : findFile(sourceRoot, "train_dat_rename_map.csv");
   let features = parseUnitManifest(options.unitManifestText);
+  let dictionaryProblem = null;
   if (dictionaryFile) {
+    const dictionaryText = fs2.readFileSync(dictionaryFile, "utf8");
+    dictionaryProblem = dictionaryDiagnostics(dictionaryText);
     features = mergeRecords(features, dictionaryFeatures(
-      fs2.readFileSync(dictionaryFile, "utf8"),
+      dictionaryText,
       renameMapFile ? fs2.readFileSync(renameMapFile, "utf8") : null,
       sourceRoot
     ));
   }
   let schemaVersion = null;
   if (file2) {
-    const raw = JSON.parse(fs2.readFileSync(file2, "utf8"));
+    const rawText = fs2.readFileSync(file2, "utf8");
+    let raw;
+    try {
+      raw = JSON.parse(rawText);
+    } catch (error62) {
+      const looksLikeCsv = /^\s*[^[{\r\n]+,[^\r\n]*$/m.test(rawText.split(/\r?\n/, 1)[0] || "");
+      const hint = looksLikeCsv ? ` The file looks like CSV, not JSON. Feature dictionaries are passed with --feature-dictionary (or discovered via --source-root), while --features expects sage.features.json.` : "";
+      throw new Error(`Feature metadata file is not valid JSON: ${path2.basename(file2)} (${error62.message}).${hint}`);
+    }
     schemaVersion = raw.schemaVersion || null;
     features = mergeRecords(features, normalizeFeatureRecords(raw));
   }
@@ -39331,13 +39426,16 @@ function loadFeatureMetadata(runDirectory, explicitPath, options = {}) {
   const resolvedStatuses = /* @__PURE__ */ new Set(["confirmed", "imported-documentation"]);
   const resolved = runFeatures.filter((name) => resolvedStatuses.has(features[name]?.reviewStatus)).length;
   const warnings = [];
+  if (dictionaryProblem) warnings.push(dictionaryProblem.message);
   if (!file2 && !dictionaryFile && !Object.keys(parseUnitManifest(options.unitManifestText)).length) warnings.push("No feature metadata was found; physical interpretation is structure-only.");
-  else if (runFeatures.length && resolved < runFeatures.length) warnings.push(`${runFeatures.length - resolved} of ${runFeatures.length} feature(s) still need a user-confirmed explanation or source trace.`);
+  else if (!dictionaryProblem?.fatal && runFeatures.length && resolved < runFeatures.length) warnings.push(`${runFeatures.length - resolved} of ${runFeatures.length} feature(s) still need a user-confirmed explanation or source trace.`);
   return {
     file: file2,
     sources: { featureMetadata: file2, featureDictionary: dictionaryFile, renameMap: renameMapFile, sourceRoot, embeddedUnitManifest: !!options.unitManifestText },
     features,
     warnings,
+    dictionaryProblem,
+    expectedDictionaryColumns: DICTIONARY_COLUMNS,
     schemaVersion,
     resolvedFeatures: resolved,
     totalFeatures: runFeatures.length
@@ -39549,11 +39647,14 @@ function selectModels(result, summaries, options = {}) {
   }
   const competitive = scored.filter((item) => competitiveRanks.has(item.rank));
   const by = (items, key) => [...items].sort((a, b) => b._rawScores[key] - a._rawScores[key] || a.rank - b.rank);
+  const multiTask = !!(result.meta?.tasks && result.meta.tasks.length > 1);
+  const hasHoldout = import_sisso_core.default.availableDatasets(result).includes("verify");
+  const stabilityRole = multiTask && !hasHoldout ? "task-consistent" : "robust";
   const roles = [
     ["predictive", predictive],
     ["balanced", by(competitive, "balanced")[0]],
     ["interpretable", by(competitive, "interpretabilityEvidence")[0]],
-    ["robust", by(competitive, "robustness")[0]]
+    [stabilityRole, by(competitive, "robustness")[0]]
   ];
   const recommendations = /* @__PURE__ */ new Map();
   for (const [role, item] of roles) {
@@ -39573,6 +39674,14 @@ function selectModels(result, summaries, options = {}) {
       balancedWeights: { performance: 0.5, robustness: 0.2, interpretabilityEvidence: 0.3 },
       nearOptimalTolerance: tolerance,
       competitivePool: competitive.length,
+      // Expose what the stability score measures in this run, so a high score
+      // is not mistaken for external validation.
+      stability: {
+        role: stabilityRole,
+        basis: hasHoldout ? "relative train/verify RMSE gap" : "spread of per-task RMSE (all in-sample)",
+        externalValidation: hasHoldout,
+        note: hasHoldout ? "Robust means the hold-out error is close to the training error." : "No hold-out exists for this run. A high task-consistency score means the model fits every task about equally well; it is NOT evidence of generalisation."
+      },
       note: "Recommendations are an auditable shortlist, not an automatic claim of physical truth. Review feature provenance and domain constraints before acceptance."
     },
     paretoFront: pareto.front,
@@ -39600,6 +39709,200 @@ function analyzeDirectory(directory, options = {}) {
   });
   const summaries = result.models.map((model) => summarizeModel(result, model, featureMetadata.features));
   return { discovery, health, result, featureMetadata, summaries };
+}
+
+// src/leakage.mjs
+var KEY_SEPARATORS = /[_\s|,;]+/;
+function sampleKeys(rawName) {
+  const name = String(rawName ?? "").trim();
+  if (!name) return [];
+  const keys = [{ kind: "name", value: name }];
+  const parts = name.split(KEY_SEPARATORS).filter(Boolean);
+  if (parts.length > 1) {
+    keys.push({ kind: "id", value: parts[0] });
+    keys.push({ kind: "formula", value: parts[1] });
+  }
+  return keys;
+}
+function indexByKey(names, kind) {
+  const index = /* @__PURE__ */ new Map();
+  names.forEach((raw, position) => {
+    const key = sampleKeys(raw).find((entry) => entry.kind === kind);
+    if (!key) return;
+    if (!index.has(key.value)) index.set(key.value, []);
+    index.get(key.value).push(position);
+  });
+  return index;
+}
+function firstFew(items, count = 5) {
+  return items.slice(0, count);
+}
+function summarizeDataset(label, names, temperatures) {
+  const distinct = new Set(names);
+  const byTemperature = /* @__PURE__ */ new Map();
+  if (temperatures) {
+    temperatures.forEach((value, position) => {
+      if (value === null || value === void 0 || value === "") return;
+      const key = String(value);
+      if (!byTemperature.has(key)) byTemperature.set(key, /* @__PURE__ */ new Set());
+      byTemperature.get(key).add(names[position]);
+    });
+  }
+  return {
+    label,
+    rows: names.length,
+    distinctSamples: distinct.size,
+    repeatedRows: names.length - distinct.size,
+    temperatures: [...byTemperature.keys()].sort((a, b) => Number(a) - Number(b))
+  };
+}
+function compareSets(candidate, reference) {
+  const referenceNames = reference.names;
+  const candidateNames = candidate.names;
+  const referenceNameSet = new Set(referenceNames);
+  const findings = [];
+  const identicalObject = referenceNames === candidateNames;
+  for (const kind of ["name", "id", "formula"]) {
+    const referenceIndex = indexByKey(referenceNames, kind);
+    const candidateIndex = indexByKey(candidateNames, kind);
+    const shared = [...candidateIndex.keys()].filter((key) => referenceIndex.has(key));
+    if (!shared.length) continue;
+    const candidateHits = shared.reduce((total, key) => total + candidateIndex.get(key).length, 0);
+    const examples = firstFew(shared.map((key) => ({
+      key,
+      candidateRows: candidateIndex.get(key).length,
+      referenceRows: referenceIndex.get(key).length
+    })), 5);
+    findings.push({
+      key: kind,
+      sharedKeys: shared.length,
+      candidateRowsAffected: candidateHits,
+      candidateRowFraction: candidateNames.length ? candidateHits / candidateNames.length : 0,
+      examples
+    });
+  }
+  const signature = (name, target, temperature) => `${name}\0${target}\0${temperature === null || temperature === void 0 ? "" : temperature}`;
+  const referenceSignatures = new Set(referenceNames.map((name, position) => signature(name, reference.targets[position], reference.temperatures[position])));
+  const duplicateObservations = [];
+  candidateNames.forEach((name, position) => {
+    if (referenceSignatures.has(signature(name, candidate.targets[position], candidate.temperatures[position]))) {
+      duplicateObservations.push(name);
+    }
+  });
+  let verdict = "disjoint";
+  if (identicalObject) verdict = "same-dataset";
+  else if (duplicateObservations.length) verdict = "leaked-identical-rows";
+  else if (findings.some((entry) => entry.key === "name")) verdict = "leaked-same-sample";
+  else if (findings.some((entry) => entry.key === "id")) verdict = "shared-structure-ids";
+  else if (findings.some((entry) => entry.key === "formula")) verdict = "shared-compositions";
+  return {
+    candidate: candidate.label,
+    reference: reference.label,
+    verdict,
+    duplicateObservations: {
+      count: duplicateObservations.length,
+      fraction: candidateNames.length ? duplicateObservations.length / candidateNames.length : 0,
+      examples: firstFew([...new Set(duplicateObservations)], 5)
+    },
+    findings
+  };
+}
+var VERDICT_NOTES = {
+  "same-dataset": "The two row sets are the identical object; this is a self-comparison, not a split.",
+  "leaked-identical-rows": "The held-out rows repeat the same sample name, target and condition as fitted rows. These rows are the SAME observation, so their hold-out metrics are in-sample and must not be reported as generalisation.",
+  "leaked-same-sample": "The held-out rows reuse sample names that were fitted (at a different condition or target). Hold-out metrics for those samples are in-sample measurements of a known material.",
+  "shared-structure-ids": "No repeated observations, but the held-out set reuses structure ids that were fitted (typically the same structure at other temperatures). Metrics measure interpolation on known structures, not new chemistries.",
+  "shared-compositions": "No shared ids, but the held-out set reuses chemical compositions. Metrics partly measure interpolation within known composition families.",
+  disjoint: "No shared sample name, structure id, or composition was detected."
+};
+function noteFor(verdict) {
+  return VERDICT_NOTES[verdict] || "Split relationship not classified.";
+}
+function rowsFromText(text, label, temperatureColumn) {
+  const lines = String(text || "").split(/\r?\n/).filter((line) => line.trim());
+  const names = [];
+  const targets = [];
+  const temperatures = [];
+  for (const line of lines.slice(1)) {
+    const cells = line.trim().split(/\s+/);
+    if (!cells.length) continue;
+    names.push(cells[0]);
+    targets.push(cells.length > 1 ? cells[1] : "");
+    temperatures.push(temperatureColumn !== null && temperatureColumn < cells.length ? cells[temperatureColumn] : null);
+  }
+  return { label, names, targets, temperatures };
+}
+function resolveTemperatureColumn(headerNames) {
+  if (!Array.isArray(headerNames)) return null;
+  const index = headerNames.findIndex((name) => /^temperature/i.test(String(name || "").trim()));
+  return index >= 0 ? index : null;
+}
+function leakageReport(analysis, options = {}) {
+  const files = analysis?.discovery?.healthFiles || {};
+  const trainText = files.train;
+  const verifyText = options.ignoreVerify ? void 0 : files.verify;
+  if (!trainText) throw new Error("Train data is unavailable; cannot run a leakage check.");
+  const headerNames = analysis?.result?.columns?.map((column) => column.original) || [];
+  const temperatureColumn = resolveTemperatureColumn(headerNames);
+  const trainRows = rowsFromText(trainText, "train", temperatureColumn);
+  const trainSummary = summarizeDataset("train", trainRows.names, trainRows.temperatures);
+  const multiTask = !!(analysis?.result?.meta?.tasks && analysis.result.meta.tasks.length > 1);
+  const comparisons = [];
+  if (verifyText) {
+    const verifyRows = rowsFromText(verifyText, "verify", temperatureColumn);
+    const verifySummary = summarizeDataset("verify", verifyRows.names, verifyRows.temperatures);
+    const comparison = compareSets(verifyRows, trainRows);
+    comparison.note = noteFor(comparison.verdict);
+    comparisons.push(comparison);
+    return {
+      kind: "sisso-sage-leakage",
+      mode: "train-vs-verify",
+      conditionColumn: temperatureColumn === null ? null : headerNames[temperatureColumn],
+      datasets: [trainSummary, verifySummary],
+      comparisons,
+      verdict: comparison.verdict,
+      holdoutIsIndependent: comparison.verdict === "disjoint" || comparison.verdict === "shared-compositions" ? null : false,
+      guidance: "holdoutIsIndependent=false means hold-out metrics are not out-of-sample evidence. null means no identical rows were found but the split still reuses compositions, or no verify.dat is present."
+    };
+  }
+  if (multiTask) {
+    const tasks = analysis.result.meta.tasks;
+    const taskRows = tasks.map((task, position) => {
+      const start = Number.isFinite(task.start) ? task.start : 0;
+      const count = Number.isFinite(task.n) ? task.n : 0;
+      const rows = { label: task.key || task.label || `task_${position + 1}`, names: trainRows.names.slice(start, start + count), targets: trainRows.targets.slice(start, start + count), temperatures: trainRows.temperatures.slice(start, start + count) };
+      return rows;
+    });
+    for (let i = 0; i < taskRows.length; i++) {
+      for (let j = 0; j < taskRows.length; j++) {
+        if (i === j) continue;
+        const comparison = compareSets(taskRows[i], taskRows[j]);
+        comparison.note = noteFor(comparison.verdict);
+        comparisons.push(comparison);
+      }
+    }
+    const anyLeak = comparisons.some((entry) => entry.verdict.startsWith("leaked"));
+    return {
+      kind: "sisso-sage-leakage",
+      mode: "task-vs-task",
+      conditionColumn: temperatureColumn === null ? null : headerNames[temperatureColumn],
+      datasets: [trainSummary, ...taskRows.map((task) => summarizeDataset(task.label, task.names, task.temperatures))],
+      comparisons,
+      verdict: anyLeak ? "leaked-same-sample" : "disjoint",
+      holdoutIsIndependent: null,
+      guidance: "This run has no verify.dat (MT-SISSO). Task comparisons are reported so you can see whether a task is a genuine partition; MT-SISSO has no hold-out, so no metric in this run is out-of-sample."
+    };
+  }
+  return {
+    kind: "sisso-sage-leakage",
+    mode: "train-only",
+    conditionColumn: temperatureColumn === null ? null : headerNames[temperatureColumn],
+    datasets: [trainSummary],
+    comparisons,
+    verdict: "not-applicable",
+    holdoutIsIndependent: null,
+    guidance: "No verify.dat and no task partition were found, so there is no split to check. Every metric in this run is in-sample."
+  };
 }
 
 // src/source-trace.mjs
@@ -39698,16 +40001,26 @@ function sortValue(summary, spec) {
   const value = summary.metrics?.[dataset]?.[metric];
   return Number.isFinite(value) ? ["r2", "rho"].includes(metric) ? -value : value : Number.POSITIVE_INFINITY;
 }
+var MODEL_LIST_HARD_CAP = 1e5;
+function resolveModelLimit(requested, fallback = 20) {
+  const parsed = Number(requested);
+  const limit = Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : fallback;
+  return Math.min(MODEL_LIST_HARD_CAP, limit);
+}
 function listModelsResult(analysis, options = {}) {
   let models = [...analysis.summaries];
   if (options.feature) models = models.filter((model) => model.features.includes(String(options.feature)));
   const sort = options.sort || "rank";
   models.sort((a, b) => sortValue(a, sort) - sortValue(b, sort) || a.rank - b.rank);
-  const limit = Math.max(1, Math.min(100, Number(options.limit) || 20));
+  const limit = resolveModelLimit(options.limit);
+  const returned = Math.min(limit, models.length);
   return {
     kind: "sisso-sage-model-list",
     total: models.length,
-    returned: Math.min(limit, models.length),
+    returned,
+    limit,
+    truncated: returned < models.length,
+    hardCap: MODEL_LIST_HARD_CAP,
     sort,
     models: models.slice(0, limit)
   };
@@ -39741,6 +40054,9 @@ function selectionResult(analysis, options = {}) {
       nearOptimalTolerance: options.nearOptimalTolerance
     })
   };
+}
+function leakageResult(analysis, options = {}) {
+  return leakageReport(analysis, { ignoreVerify: options.ignoreVerify });
 }
 function featureContextResult(analysis, feature, options = {}) {
   const name = String(feature || "");
@@ -39802,12 +40118,15 @@ function resultMessage(result) {
   if (result.kind === "sisso-sage-inspection") {
     return `Inspected SISSO run: health=${result.health?.level || "unknown"}, models=${result.run?.nModels ?? "unknown"}, metadata=${result.featureMetadata?.resolvedFeatures ?? 0}/${result.featureMetadata?.totalFeatures ?? 0}.`;
   }
-  if (result.kind === "sisso-sage-model-list") return `Returned ${result.returned} of ${result.total} matching models.`;
+  if (result.kind === "sisso-sage-model-list") return `Returned ${result.returned} of ${result.total} matching models${result.truncated ? " (truncated)" : ""}.`;
   if (result.kind === "sisso-sage-model") return `Returned evidence for model rank ${result.model.rank}.`;
   if (result.kind === "sisso-sage-comparison") return `Compared model ranks ${result.ranks.join(", ")}.`;
   if (result.kind === "sisso-sage-pareto") return `Returned ${result.front.length} Pareto-front models from ${result.eligibleModels} eligible models.`;
   if (result.kind === "sisso-sage-selection") return `Returned ${result.recommendations.length} auditable model candidates.`;
   if (result.kind === "sisso-sage-feature-context") return `Feature source trace status: ${result.status}.`;
+  if (result.kind === "sisso-sage-leakage") {
+    return `Leakage check (${result.mode}): verdict=${result.verdict}` + (result.holdoutIsIndependent === false ? " \u2014 hold-out is NOT independent." : "") + ".";
+  }
   return "SISSO-Sage tool completed.";
 }
 function errorResult(error62) {
@@ -39853,12 +40172,17 @@ function createSissoSageMcpServer(options = {}) {
     description: "Use first for every SISSO result. Validates required files and returns run layout, health, datasets, task metadata, warnings, and feature-provenance coverage.",
     inputSchema: runInput
   }, (input2) => inspectionResult(cache.load(input2.run, input2)));
+  registerReadTool(server, "check_leakage", {
+    title: "Check hold-out independence",
+    description: "Verify that held-out rows are genuinely unseen before trusting any hold-out metric. Compares verify.dat against train.dat by exact sample name, then structure id, then composition, and flags identical sample+condition rows (true leakage). For MT-SISSO without verify.dat it compares the task partitions instead. Read-only and descriptive.",
+    inputSchema: runInput
+  }, (input2) => leakageResult(cache.load(input2.run, input2)));
   registerReadTool(server, "list_models", {
     title: "List SISSO models",
-    description: "List a bounded set of model evidence records, optionally sorted by a dataset metric or filtered by primitive feature.",
+    description: "List model evidence records, optionally sorted by a dataset metric or filtered by primitive feature. Use limit to page through every model; the response reports returned/limit/truncated so a partial list is never mistaken for the full ranking.",
     inputSchema: {
       ...runInput,
-      limit: external_exports.number().int().min(1).max(100).optional(),
+      limit: external_exports.number().int().min(1).max(MODEL_LIST_HARD_CAP).optional(),
       sort: external_exports.string().optional().describe("rank, interpretability, or dataset.metric such as verify.rmse or t1.rmse."),
       feature: external_exports.string().optional().describe("Only return models using this exact primitive feature name.")
     }

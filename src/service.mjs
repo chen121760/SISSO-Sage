@@ -1,5 +1,6 @@
 import path from "node:path";
 import { analyzeDirectory, paretoModels, selectModels } from "./analysis.mjs";
+import { leakageReport } from "./leakage.mjs";
 import { traceFeatureSource } from "./source-trace.mjs";
 
 const ANALYSIS_OPTION_KEYS = [
@@ -53,16 +54,32 @@ function sortValue(summary, spec) {
     : Number.POSITIVE_INFINITY;
 }
 
+// A run can legitimately contain tens of thousands of ranked models, so the
+// list cap must not silently hide the tail: a caller that asks for every model
+// and receives a truncated list will compute wrong ranks (e.g. "the best model
+// by verify RMSE") without any indication that data was withheld.
+export const MODEL_LIST_HARD_CAP = 100000;
+
+export function resolveModelLimit(requested, fallback = 20) {
+  const parsed = Number(requested);
+  const limit = Number.isFinite(parsed) ? Math.max(1, Math.floor(parsed)) : fallback;
+  return Math.min(MODEL_LIST_HARD_CAP, limit);
+}
+
 export function listModelsResult(analysis, options = {}) {
   let models = [...analysis.summaries];
   if (options.feature) models = models.filter((model) => model.features.includes(String(options.feature)));
   const sort = options.sort || "rank";
   models.sort((a, b) => sortValue(a, sort) - sortValue(b, sort) || a.rank - b.rank);
-  const limit = Math.max(1, Math.min(100, Number(options.limit) || 20));
+  const limit = resolveModelLimit(options.limit);
+  const returned = Math.min(limit, models.length);
   return {
     kind: "sisso-sage-model-list",
     total: models.length,
-    returned: Math.min(limit, models.length),
+    returned,
+    limit,
+    truncated: returned < models.length,
+    hardCap: MODEL_LIST_HARD_CAP,
     sort,
     models: models.slice(0, limit),
   };
@@ -100,6 +117,10 @@ export function selectionResult(analysis, options = {}) {
       nearOptimalTolerance: options.nearOptimalTolerance,
     }),
   };
+}
+
+export function leakageResult(analysis, options = {}) {
+  return leakageReport(analysis, { ignoreVerify: options.ignoreVerify });
 }
 
 export function featureContextResult(analysis, feature, options = {}) {
