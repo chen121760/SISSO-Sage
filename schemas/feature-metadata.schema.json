@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sisso-sage.dev/schemas/feature-metadata.schema.json",
+  "title": "SISSO-Sage feature metadata",
+  "type": "object",
+  "required": ["schemaVersion", "features"],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "features": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "symbol": { "type": "string" },
+          "unit": { "type": "string" },
+          "category": { "type": "string" },
+          "aliases": { "type": "array", "items": { "type": "string" } },
+          "reviewStatus": {
+            "enum": ["confirmed", "ai-draft", "imported-documentation", "unit-manifest-only", "needs-user-confirmation"]
+          },
+          "evidence": { "type": "array" },
+          "source": {
+            "type": "object",
+            "properties": {
+              "file": { "type": "string" },
+              "function": { "type": "string" },
+              "line": { "type": ["integer", "null"] }
+            }
+          },
+          "constraints": { "type": "object" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sisso-sage.dev/schemas/bundle.schema.json",
+  "title": "SISSO-Sage analysis bundle",
+  "type": "object",
+  "required": ["schemaVersion", "kind", "generatedAt", "source", "run", "health", "models", "selection", "provenance"],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "kind": { "const": "sisso-sage-analysis" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "source": { "type": "object" },
+    "run": { "type": "object" },
+    "health": {
+      "type": "object",
+      "required": ["level", "checks"],
+      "properties": {
+        "level": { "enum": ["pass", "warning", "error"] },
+        "checks": { "type": "array" }
+      }
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rank", "descriptorDimension", "formulas", "descriptors", "features", "metrics", "interpretabilityEvidence"],
+        "properties": {
+          "rank": { "type": "integer", "minimum": 1 },
+          "descriptorDimension": { "type": "integer", "minimum": 1 },
+          "formulas": { "type": "array" },
+          "descriptors": { "type": "array" },
+          "features": { "type": "array", "items": { "type": "string" } },
+          "metrics": { "type": "object" },
+          "interpretabilityEvidence": {
+            "type": "object",
+            "required": ["score", "status", "components", "risks", "limitation"]
+          }
+        }
+      }
+    },
+    "selection": { "type": "object" },
+    "provenance": { "type": "object" }
+  }
+}

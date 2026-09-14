@@ -1,0 +1,6 @@
+SISSO-Sage
+Copyright 2026 SISSO-Sage contributors
+
+This product includes parser and health-check components derived from the
+SISSO-Analyzer project. See src/vendor and scripts/sync-engine.mjs for their
+provenance and synchronization path.

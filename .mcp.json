@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "sisso_sage": {
+      "command": "node",
+      "args": [
+        "./dist/sisso-sage-mcp.mjs"
+      ],
+      "enabled": true,
+      "default_tools_approval_mode": "approve",
+      "startup_timeout_sec": 20,
+      "tool_timeout_sec": 120,
+      "env_vars": []
+    }
+  }
+}

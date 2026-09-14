@@ -1,0 +1,5 @@
+node_modules/
+coverage/
+*.bundle.json
+*.tmp
+.DS_Store

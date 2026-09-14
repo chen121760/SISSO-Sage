@@ -1,0 +1,34 @@
+{
+  "name": "sisso-sage",
+  "version": "0.2.0",
+  "description": "AI-ready inspection, evidence retrieval, and model selection for completed SISSO regression runs.",
+  "author": {
+    "name": "SISSO-Sage contributors"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "SISSO",
+    "materials-informatics",
+    "symbolic-regression",
+    "interpretable-machine-learning"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "SISSO-Sage",
+    "shortDescription": "Evidence-driven SISSO model analysis for AI.",
+    "longDescription": "Inspect completed SISSO runs, compare model evidence, trace feature provenance, and shortlist predictive and interpretable candidates without treating heuristics as physical proof.",
+    "developerName": "SISSO-Sage contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read",
+      "Analysis"
+    ],
+    "defaultPrompt": [
+      "Inspect my SISSO run and report whether it is safe to analyze.",
+      "Select and compare predictive, robust, and interpretable SISSO models.",
+      "Trace the source and meaning of features used by my finalist models."
+    ],
+    "brandColor": "#315B7D"
+  }
+}

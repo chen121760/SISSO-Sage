@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0.0",
+  "features": {
+    "band_gap": {
+      "description": "Electronic band gap calculated for the relaxed structure.",
+      "symbol": "E_g",
+      "unit": "eV",
+      "category": "electronic",
+      "source": {
+        "file": "features/electronic.py",
+        "function": "extract_band_gap",
+        "line": 42
+      },
+      "constraints": {
+        "positive": true,
+        "bounded": [0, null],
+        "monotonicExpectation": null
+      }
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "name": "sisso-sage",
+  "version": "0.2.0",
+  "description": "AI-ready SISSO analysis and evidence-driven model selection toolkit",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "sisso-sage": "./bin/sisso-sage.mjs",
+    "sisso-sage-mcp": "./dist/sisso-sage-mcp.mjs"
+  },
+  "exports": {
+    ".": "./src/index.mjs",
+    "./mcp": "./mcp/server.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "mcp",
+    "src",
+    "schemas",
+    "scripts",
+    "examples",
+    "skills",
+    ".codex-plugin",
+    ".mcp.json",
+    "LICENSE",
+    "NOTICE",
+    "AGENTS.md",
+    "AI_GUIDE.md",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "smoke": "node ./bin/sisso-sage.mjs capabilities",
+    "build:mcp": "node ./scripts/build-mcp.mjs",
+    "mcp": "node ./mcp/server.mjs",
+    "mcp:dist": "node ./dist/sisso-sage-mcp.mjs",
+    "prepack": "npm run build:mcp",
+    "sync-engine": "node ./scripts/sync-engine.mjs"
+  },
+  "keywords": [
+    "SISSO",
+    "materials-informatics",
+    "symbolic-regression",
+    "interpretable-machine-learning",
+    "AI-tools"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.6.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}
