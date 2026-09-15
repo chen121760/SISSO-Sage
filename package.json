@@ -1,6 +1,6 @@
 {
   "name": "sisso-sage",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "AI-ready SISSO analysis and evidence-driven model selection toolkit",
   "private": true,
   "type": "module",
@@ -27,7 +27,8 @@
     "NOTICE",
     "AGENTS.md",
     "AI_GUIDE.md",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md"
   ],
   "scripts": {
     "test": "node --test",

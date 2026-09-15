@@ -1,7 +1,7 @@
 export { Core, HealthCheck } from "./engine.mjs";
 export { discoverRun, pipelineFiles, readTarEntries } from "./discover.mjs";
 export { loadFeatureMetadata, featureMetadataTemplate, parseUnitManifest } from "./metadata.mjs";
-export { interpretabilityEvidence } from "./interpretability.mjs";
+export { formulaEvidence, interpretabilityEvidence } from "./interpretability.mjs";
 export { leakageReport, sampleKeys } from "./leakage.mjs";
 export { analyzeDirectory, buildBundle, paretoModels, selectModels, summarizeModel, SCHEMA_VERSION } from "./analysis.mjs";
 export { CAPABILITIES } from "./capabilities.mjs";

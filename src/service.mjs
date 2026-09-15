@@ -1,5 +1,5 @@
 import path from "node:path";
-import { analyzeDirectory, paretoModels, selectModels } from "./analysis.mjs";
+import { analyzeDirectory, paretoModels, selectModels, summarizeModel } from "./analysis.mjs";
 import { leakageReport } from "./leakage.mjs";
 import { traceFeatureSource } from "./source-trace.mjs";
 
@@ -39,6 +39,7 @@ export function inspectionResult(analysis) {
     featureMetadata: {
       sources: analysis.featureMetadata.sources,
       resolvedFeatures: analysis.featureMetadata.resolvedFeatures,
+      documentedFeatures: analysis.featureMetadata.documentedFeatures,
       totalFeatures: analysis.featureMetadata.totalFeatures,
     },
   };
@@ -46,7 +47,10 @@ export function inspectionResult(analysis) {
 
 function sortValue(summary, spec) {
   if (spec === "rank") return summary.rank;
-  if (spec === "interpretability") return -summary.interpretabilityEvidence.score;
+  if (spec === "interpretability") {
+    throw new Error("Sorting by interpretability was removed because no reproducible scalar can represent scientific meaning. Use structure.astNodeCount or a dataset metric, then review finalists semantically.");
+  }
+  if (spec === "structure.astNodeCount") return summary.formulaEvidence.structure.astNodeCount;
   const [dataset, metric] = String(spec || "rank").split(".");
   const value = summary.metrics?.[dataset]?.[metric];
   return Number.isFinite(value)
@@ -87,15 +91,17 @@ export function listModelsResult(analysis, options = {}) {
 
 export function modelResult(analysis, rank) {
   const numericRank = Number(rank);
-  const model = analysis.summaries.find((item) => item.rank === numericRank);
-  if (!model) throw new Error(`Model rank not found: ${rank}`);
+  const rawModel = analysis.result.models.find((item) => item.rank === numericRank);
+  if (!rawModel) throw new Error(`Model rank not found: ${rank}`);
+  const model = summarizeModel(analysis.result, rawModel, analysis.featureMetadata.features);
   return { kind: "sisso-sage-model", model };
 }
 
 export function comparisonResult(analysis, ranks) {
   const normalized = [...new Set((ranks || []).map(Number).filter(Number.isFinite))];
   if (normalized.length < 2) throw new Error("At least two distinct model ranks are required.");
-  const models = normalized.map((rank) => analysis.summaries.find((item) => item.rank === rank)).filter(Boolean);
+  const rawModels = normalized.map((rank) => analysis.result.models.find((item) => item.rank === rank)).filter(Boolean);
+  const models = rawModels.map((model) => summarizeModel(analysis.result, model, analysis.featureMetadata.features));
   if (models.length !== normalized.length) throw new Error("One or more requested model ranks were not found.");
   return { kind: "sisso-sage-comparison", ranks: normalized, models };
 }
@@ -103,7 +109,7 @@ export function comparisonResult(analysis, ranks) {
 export function paretoResult(analysis, options = {}) {
   return {
     kind: "sisso-sage-pareto",
-    ...paretoModels(analysis.result, { dataset: options.dataset, metric: options.metric }),
+    ...paretoModels(analysis.result, { dataset: options.dataset, metric: options.metric }, analysis.summaries),
   };
 }
 
@@ -128,10 +134,14 @@ export function featureContextResult(analysis, feature, options = {}) {
   const exists = analysis.result.columns.slice(2).some((column) => column.original === name);
   if (!exists) throw new Error(`Feature is not present in this SISSO run: ${name}`);
   const sourceRoot = options.sourceRoot || analysis.featureMetadata.sources.sourceRoot;
-  const trace = traceFeatureSource(name, sourceRoot, { limit: options.limit });
+  const metadata = analysis.featureMetadata.features[name];
+  const trace = traceFeatureSource(name, sourceRoot, {
+    limit: options.limit,
+    preferredSource: metadata?.source,
+  });
   return {
     kind: "sisso-sage-feature-context",
-    metadata: analysis.featureMetadata.features[name],
+    metadata,
     ...trace,
   };
 }

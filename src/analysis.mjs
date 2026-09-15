@@ -2,10 +2,10 @@ import path from "node:path";
 import { Core, HealthCheck } from "./engine.mjs";
 import { discoverRun, pipelineFiles } from "./discover.mjs";
 import { loadFeatureMetadata } from "./metadata.mjs";
-import { interpretabilityEvidence } from "./interpretability.mjs";
+import { formulaEvidence } from "./interpretability.mjs";
 import { VERSION } from "./version.mjs";
 
-export const SCHEMA_VERSION = "1.0.0";
+export const SCHEMA_VERSION = "2.0.0";
 
 function finite(value) {
   return Number.isFinite(value) ? value : null;
@@ -34,22 +34,23 @@ function modelFeatures(result, model) {
   return Core.modelFeatureNames(model, names);
 }
 
-export function summarizeModel(result, model, metadata = {}) {
+export function summarizeModel(result, model, metadata = {}, options = {}) {
   const datasets = Core.availableDatasets(result);
   const metrics = Object.fromEntries(datasets.map((key) => [key, cleanMetrics(model.metrics?.[key])]));
   const formulas = model.formulasOriginalByTask?.length
     ? model.formulasOriginalByTask.map((formula, index) => ({ dataset: `t${index + 1}`, formula }))
     : [{ dataset: "all", formula: model.formulaOriginal }];
-  const evidence = interpretabilityEvidence(model, result.columns.slice(2).map((column) => column.original), metadata);
+  const evidence = formulaEvidence(model, result, metadata, options);
   return {
     rank: model.rank,
-    descriptorDimension: evidence.dimension,
+    descriptorDimension: evidence.structure.descriptorDimension,
     formulas,
     descriptors: (model.descriptors || []).map((item) => ({ id: item.id, expression: item.original })),
     features: modelFeatures(result, model),
     metrics,
     sissoReported: { rmse: finite(model.rmseSisso), maxae: finite(model.maxaeSisso) },
-    interpretabilityEvidence: evidence,
+    evaluationError: model.error || null,
+    formulaEvidence: evidence,
   };
 }
 
@@ -73,159 +74,308 @@ function lowerIsBetter(metric) {
   return !["r2", "rho"].includes(metric);
 }
 
-function symbolicComplexity(model) {
-  const descriptors = model.descriptors || [];
-  const operations = descriptors.reduce((sum, item) => {
-    const text = item.original || item.renamed || "";
-    return sum + (text.match(/[+*/^]|(^|[^eE])-/g) || []).length
-      + (text.match(/\b(?:log|exp|sqrt|cbrt|abs)\s*\(/g) || []).length;
-  }, 0);
-  return Math.max(1, descriptors.length || model.featureIds?.length || 1) + operations;
+function targetScale(result) {
+  const values = result?.train?.cols?.[result?.meta?.targetLetter];
+  if (!values?.length) return null;
+  const finiteValues = Array.from(values).filter(Number.isFinite);
+  if (finiteValues.length < 2) return null;
+  const mean = finiteValues.reduce((sum, value) => sum + value, 0) / finiteValues.length;
+  const variance = finiteValues.reduce((sum, value) => sum + (value - mean) ** 2, 0) / finiteValues.length;
+  const std = Math.sqrt(variance);
+  return std > 0 ? std : null;
 }
 
-function percentileScores(items, getter, minimize = true) {
-  const finiteItems = items.map((item) => ({ item, value: getter(item) })).filter((entry) => Number.isFinite(entry.value));
-  finiteItems.sort((a, b) => minimize ? a.value - b.value : b.value - a.value);
-  const scores = new Map();
-  const denominator = Math.max(1, finiteItems.length - 1);
-  finiteItems.forEach((entry, index) => scores.set(entry.item.rank, 100 * (1 - index / denominator)));
-  return scores;
-}
-
-function robustnessValue(model, result) {
-  const datasets = Core.availableDatasets(result);
-  if (datasets.includes("verify")) {
-    const train = metricValue(model, "train", "rmse");
-    const verify = metricValue(model, "verify", "rmse");
-    return Number.isFinite(train) && Number.isFinite(verify) ? Math.abs(verify - train) / Math.max(Math.abs(train), 1e-12) : NaN;
+function generalizationGap(model, result, scale = targetScale(result)) {
+  if (!Core.availableDatasets(result).includes("verify")) {
+    return { status: "not-assessable", reason: "No hold-out dataset is available." };
   }
-  const tasks = datasets.filter((key) => /^t\d+$/.test(key));
-  if (tasks.length > 1) {
-    const values = tasks.map((key) => metricValue(model, key, "rmse")).filter(Number.isFinite);
-    if (values.length !== tasks.length) return NaN;
-    const mean = values.reduce((a, b) => a + b, 0) / values.length;
-    const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
-    return Math.sqrt(variance) / Math.max(Math.abs(mean), 1e-12);
+  const train = metricValue(model, "train", "rmse");
+  const verify = metricValue(model, "verify", "rmse");
+  if (!Number.isFinite(train) || !Number.isFinite(verify)) {
+    return { status: "not-assessable", reason: "Train or verify RMSE is non-finite." };
   }
-  return NaN;
+  const signed = verify - train;
+  const absolute = Math.abs(signed);
+  const relativeFloor = scale ? scale * 1e-12 : 1e-12;
+  return {
+    status: "available",
+    trainRmse: train,
+    verifyRmse: verify,
+    signed,
+    absolute,
+    relative: Math.abs(train) > relativeFloor ? absolute / Math.abs(train) : null,
+    relativeStatus: Math.abs(train) > relativeFloor ? "available" : "unstable-denominator",
+    targetScale: scale,
+    targetNormalized: scale ? absolute / scale : null,
+    interpretation: "generalization-gap-diagnostic-not-robustness",
+  };
 }
 
-export function paretoModels(result, options = {}) {
+function structuralComplexity(summary) {
+  return summary?.formulaEvidence?.structure?.astNodeCount ?? Number.POSITIVE_INFINITY;
+}
+
+function paretoLayersFor(items, objectives) {
+  if (objectives.length !== 2) throw new Error("Pareto layering currently requires exactly two objectives.");
+  const normalized = items.map((point) => ({
+    point,
+    x: objectives[0].minimize ? objectives[0].get(point) : -objectives[0].get(point),
+    y: objectives[1].minimize ? objectives[1].get(point) : -objectives[1].get(point),
+  })).sort((a, b) => a.x - b.x || a.y - b.y || a.point.rank - b.point.rank);
+  const yValues = [...new Set(normalized.map((entry) => entry.y))].sort((a, b) => a - b);
+  const yIndex = new Map(yValues.map((value, index) => [value, index + 1]));
+  const tree = new Int32Array(yValues.length + 1);
+  const query = (index) => {
+    let best = 0;
+    for (let cursor = index; cursor > 0; cursor -= cursor & -cursor) best = Math.max(best, tree[cursor]);
+    return best;
+  };
+  const update = (index, value) => {
+    for (let cursor = index; cursor < tree.length; cursor += cursor & -cursor) tree[cursor] = Math.max(tree[cursor], value);
+  };
+
+  for (let start = 0; start < normalized.length;) {
+    let end = start;
+    while (end < normalized.length && normalized[end].x === normalized[start].x) end += 1;
+    let sameXLowerYBest = 0;
+    for (let cursor = start; cursor < end;) {
+      let equalEnd = cursor;
+      while (equalEnd < end && normalized[equalEnd].y === normalized[cursor].y) equalEnd += 1;
+      const index = yIndex.get(normalized[cursor].y);
+      const rank = 1 + Math.max(query(index), sameXLowerYBest);
+      for (let item = cursor; item < equalEnd; item++) normalized[item].point.paretoRank = rank;
+      sameXLowerYBest = Math.max(sameXLowerYBest, rank);
+      cursor = equalEnd;
+    }
+    for (let cursor = start; cursor < end; cursor++) {
+      update(yIndex.get(normalized[cursor].y), normalized[cursor].point.paretoRank);
+    }
+    start = end;
+  }
+  const layers = [];
+  items.forEach((point) => {
+    const index = point.paretoRank - 1;
+    if (!layers[index]) layers[index] = [];
+    layers[index].push(point);
+  });
+  return layers;
+}
+
+function validateEvaluation(result, evaluation) {
+  const datasets = new Set([...Core.availableDatasets(result), ...(result.meta.multiTask ? ["sisso-overall"] : [])]);
+  if (!datasets.has(evaluation.dataset)) throw new Error(`Dataset is not available: ${evaluation.dataset}`);
+  if (!result.models.some((model) => Number.isFinite(metricValue(model, evaluation.dataset, evaluation.metric)))) {
+    throw new Error(`Metric is unavailable or non-finite for every model: ${evaluation.dataset}.${evaluation.metric}`);
+  }
+}
+
+function paretoObjectives(result, evaluation) {
+  const hasHoldout = Core.availableDatasets(result).includes("verify");
+  const objectives = [{
+    key: `${evaluation.dataset}.${evaluation.metric}`,
+    label: "predictive performance",
+    minimize: lowerIsBetter(evaluation.metric),
+    get: (point) => point.value,
+  }];
+  if (hasHoldout) {
+    objectives.push({
+      key: "generalizationGap.targetNormalizedAbsoluteRmse",
+      label: "target-normalized absolute train/verify RMSE gap",
+      minimize: true,
+      get: (point) => point.generalizationGap.targetNormalized,
+    });
+  } else {
+    objectives.push({
+      key: "structure.astNodeCount",
+      label: "syntactic AST node count",
+      minimize: true,
+      get: (point) => point.structuralComplexity,
+    });
+  }
+  return objectives;
+}
+
+function objectivePoint(model, summary, result, evaluation, scale) {
+  return {
+    rank: model.rank,
+    value: finite(metricValue(model, evaluation.dataset, evaluation.metric)),
+    generalizationGap: generalizationGap(model, result, scale),
+    structuralComplexity: structuralComplexity(summary),
+    descriptorDimension: summary?.descriptorDimension
+      ?? Math.max(1, model.descriptors?.length || model.featureIds?.length || 1),
+  };
+}
+
+function publicObjective(objective) {
+  return { key: objective.key, label: objective.label, direction: objective.minimize ? "minimize" : "maximize" };
+}
+
+function crowdingOrder(layer, objectives, compare) {
+  if (layer.length <= 2) return [...layer].sort(compare);
+  const distance = new Map(layer.map((point) => [point, 0]));
+  for (const objective of objectives) {
+    const sorted = [...layer].sort((a, b) => objective.get(a) - objective.get(b) || a.rank - b.rank);
+    const minimum = objective.get(sorted[0]);
+    const maximum = objective.get(sorted[sorted.length - 1]);
+    distance.set(sorted[0], Number.POSITIVE_INFINITY);
+    distance.set(sorted[sorted.length - 1], Number.POSITIVE_INFINITY);
+    if (maximum === minimum) continue;
+    for (let index = 1; index < sorted.length - 1; index++) {
+      if (!Number.isFinite(distance.get(sorted[index]))) continue;
+      const local = (objective.get(sorted[index + 1]) - objective.get(sorted[index - 1])) / (maximum - minimum);
+      distance.set(sorted[index], distance.get(sorted[index]) + local);
+    }
+  }
+  layer.forEach((point) => { point.crowdingDistance = distance.get(point); });
+  return [...layer].sort((a, b) => distance.get(b) - distance.get(a) || compare(a, b));
+}
+
+export function paretoModels(result, options = {}, summaries = null) {
   const defaults = defaultEvaluation(result);
   const evaluation = {
     ...defaults,
     dataset: options.dataset || defaults.dataset,
     metric: options.metric || defaults.metric,
   };
-  const points = result.models.map((model) => ({
+  validateEvaluation(result, evaluation);
+  const summaryByRank = new Map((summaries || result.models.map((model) => ({
     rank: model.rank,
-    error: metricValue(model, evaluation.dataset, evaluation.metric),
-    complexity: symbolicComplexity(model),
     descriptorDimension: Math.max(1, model.descriptors?.length || model.featureIds?.length || 1),
-  })).filter((point) => Number.isFinite(point.error));
-  const minimizeMetric = lowerIsBetter(evaluation.metric);
-  const front = points.filter((point) => !points.some((other) => {
-    const metricNoWorse = minimizeMetric ? other.error <= point.error : other.error >= point.error;
-    const metricBetter = minimizeMetric ? other.error < point.error : other.error > point.error;
-    return metricNoWorse && other.complexity <= point.complexity && (metricBetter || other.complexity < point.complexity);
-  })).sort((a, b) => a.complexity - b.complexity || (minimizeMetric ? a.error - b.error : b.error - a.error));
-  return { evaluation, front, eligibleModels: points.length };
+    formulaEvidence: formulaEvidence(model, result, {}),
+  }))).map((summary) => [summary.rank, summary]));
+  const scale = targetScale(result);
+  const points = result.models
+    .map((model) => objectivePoint(model, summaryByRank.get(model.rank), result, evaluation, scale))
+    .filter((point) => point.value !== null);
+  const objectives = paretoObjectives(result, evaluation);
+  const eligible = points.filter((point) => objectives.every((objective) => Number.isFinite(objective.get(point))));
+  const layers = paretoLayersFor(eligible, objectives);
+  const order = (a, b) => lowerIsBetter(evaluation.metric) ? a.value - b.value : b.value - a.value;
+  layers.forEach((layer) => layer.sort((a, b) => order(a, b) || a.rank - b.rank));
+  return {
+    evaluation,
+    objectives: objectives.map(publicObjective),
+    front: layers[0] || [],
+    layers: layers.map((layer, index) => ({ rank: index + 1, models: layer })),
+    eligibleModels: eligible.length,
+    excludedModels: points.length - eligible.length,
+    scope: {
+      rankedModelFile: "single-selected-top-file",
+      descriptorDimensionFixed: new Set(points.map((point) => point.descriptorDimension)).size <= 1,
+      limitation: "SISSO-Sage currently analyses one selected top*_D* file. Pareto layers do not compare models across different descriptor-dimension files.",
+    },
+  };
+}
+
+function candidateCautions(item, summary, best) {
+  const cautions = [];
+  if (item.value !== best) cautions.push({
+    code: "not-best-predictive-value",
+    evidence: { candidate: item.value, best },
+  });
+  if (item.generalizationGap.status !== "available") cautions.push({
+    code: "generalization-not-assessable",
+    evidence: item.generalizationGap.reason,
+  });
+  const unresolved = summary?.formulaEvidence?.provenance?.unresolvedFeatures || [];
+  if (unresolved.length) cautions.push({ code: "unresolved-feature-provenance", evidence: unresolved });
+  const invalidDatasets = (summary?.formulaEvidence?.domain?.observed || [])
+    .filter((dataset) => dataset.status === "invalid-observations").map((dataset) => dataset.dataset);
+  if (invalidDatasets.length) cautions.push({ code: "observed-domain-failure", evidence: invalidDatasets });
+  if (summary?.formulaEvidence?.domain?.observedStatus === "deferred-until-finalist-inspection"
+      && summary.formulaEvidence.domain.staticRequirements.length) {
+    cautions.push({
+      code: "observed-domain-audit-deferred",
+      evidence: summary.formulaEvidence.domain.staticRequirements.map((requirement) => requirement.code),
+    });
+  }
+  cautions.push({ code: "semantic-meaning-not-yet-assessed", evidence: "Requires the structured LLM/researcher review." });
+  return cautions;
 }
 
 export function selectModels(result, summaries, options = {}) {
-  const evaluation = { ...defaultEvaluation(result), dataset: options.dataset || defaultEvaluation(result).dataset, metric: options.metric || "rmse" };
-  const performance = percentileScores(result.models, (model) => metricValue(model, evaluation.dataset, evaluation.metric), lowerIsBetter(evaluation.metric));
-  const robustness = percentileScores(result.models, (model) => robustnessValue(model, result), true);
+  const defaults = defaultEvaluation(result);
+  const evaluation = { ...defaults, dataset: options.dataset || defaults.dataset, metric: options.metric || defaults.metric };
+  validateEvaluation(result, evaluation);
   const summaryByRank = new Map(summaries.map((summary) => [summary.rank, summary]));
-  const scored = result.models.map((model) => {
-    const summary = summaryByRank.get(model.rank);
-    const performanceScore = performance.get(model.rank) ?? 0;
-    const robustnessScore = robustness.has(model.rank) ? robustness.get(model.rank) : 50;
-    const interpretationScore = summary.interpretabilityEvidence.score;
-    return {
-      rank: model.rank,
-      value: finite(metricValue(model, evaluation.dataset, evaluation.metric)),
-      _rawScores: { performance: performanceScore, robustness: robustnessScore, interpretabilityEvidence: interpretationScore,
-        balanced: 0.50 * performanceScore + 0.20 * robustnessScore + 0.30 * interpretationScore },
-      scores: {
-        performance: Math.round(performanceScore),
-        robustness: Math.round(robustnessScore),
-        interpretabilityEvidence: interpretationScore,
-        balanced: Math.round(0.50 * performanceScore + 0.20 * robustnessScore + 0.30 * interpretationScore),
-      },
-    };
-  }).filter((item) => item.value !== null);
-
-  const pareto = paretoModels(result, evaluation);
-  const paretoRanks = new Set(pareto.front.map((point) => point.rank));
-  const eligible = scored.filter((item) => paretoRanks.has(item.rank));
-  const rankedByMetric = [...scored].sort((a, b) => {
+  const targetStd = targetScale(result);
+  const points = result.models
+    .map((model) => objectivePoint(model, summaryByRank.get(model.rank), result, evaluation, targetStd))
+    .filter((point) => point.value !== null);
+  const compare = (a, b) => {
     const delta = lowerIsBetter(evaluation.metric) ? a.value - b.value : b.value - a.value;
     return delta || a.rank - b.rank;
+  };
+  points.sort(compare);
+  const best = points[0]?.value;
+  const parsedTolerance = Number(options.nearOptimalTolerance);
+  const tolerance = Number.isFinite(parsedTolerance) ? Math.max(0, Math.min(1, parsedTolerance)) : 0.10;
+  const scale = Math.max(Math.abs(best), 1e-12);
+  const competitive = points.filter((item) => lowerIsBetter(evaluation.metric)
+    ? item.value <= best + scale * tolerance
+    : item.value >= best - scale * tolerance);
+  const objectives = paretoObjectives(result, evaluation);
+  const paretoEligible = competitive.filter((point) => objectives.every((objective) => Number.isFinite(objective.get(point))));
+  const layers = paretoLayersFor(paretoEligible, objectives);
+
+  const limit = Math.max(1, Math.min(10, Math.floor(Number(options.limit) || 5)));
+  const predictive = points[0];
+  const ordered = [];
+  const seen = new Set();
+  const add = (item) => {
+    if (item && !seen.has(item.rank)) { ordered.push(item); seen.add(item.rank); }
+  };
+  add(predictive);
+  layers.forEach((layer) => crowdingOrder(layer, objectives, compare).forEach(add));
+  [...competitive].sort(compare).forEach(add);
+  const candidates = ordered.slice(0, limit).map((item) => {
+    const roles = [];
+    if (item.rank === predictive?.rank) roles.push("predictive-best");
+    if (item.paretoRank === 1) roles.push("pareto-layer-1");
+    if (item.rank !== predictive?.rank) roles.push("near-optimal-alternative");
+    const summary = summaryByRank.get(item.rank);
+    return {
+      rank: item.rank,
+      value: item.value,
+      roles,
+      paretoRank: item.paretoRank ?? null,
+      crowdingDistance: Number.isFinite(item.crowdingDistance) ? item.crowdingDistance
+        : item.crowdingDistance === Number.POSITIVE_INFINITY ? "boundary" : null,
+      predictiveEvidence: {
+        evaluation: { dataset: evaluation.dataset, metric: evaluation.metric, value: item.value },
+        metrics: summary?.metrics || null,
+        sissoReported: summary?.sissoReported || null,
+      },
+      generalizationGap: item.generalizationGap,
+      structuralComplexity: item.structuralComplexity,
+      evidenceAgainst: candidateCautions(item, summary, best),
+    };
   });
-  const predictive = rankedByMetric[0];
-  const floorSize = Math.min(10, rankedByMetric.length);
-  const best = predictive?.value;
-  const tolerance = Number.isFinite(Number(options.nearOptimalTolerance)) ? Number(options.nearOptimalTolerance) : 0.10;
-  const competitiveRanks = new Set(rankedByMetric.slice(0, floorSize).map((item) => item.rank));
-  if (Number.isFinite(best)) {
-    rankedByMetric.forEach((item) => {
-      const near = lowerIsBetter(evaluation.metric)
-        ? item.value <= best + Math.max(Math.abs(best), 1e-12) * tolerance
-        : item.value >= best - Math.max(Math.abs(best), 1e-12) * tolerance;
-      if (near && item._rawScores.performance >= 90) competitiveRanks.add(item.rank);
-    });
-  }
-  const competitive = scored.filter((item) => competitiveRanks.has(item.rank));
-  const by = (items, key) => [...items].sort((a, b) => b._rawScores[key] - a._rawScores[key] || a.rank - b.rank);
-  // A "robustness" rank means two different things depending on the run, and
-  // conflating them invites over-reading. With a hold-out it is the relative
-  // train/verify gap. For MT-SISSO it is only how evenly the model fits across
-  // tasks - every number is in-sample, so it says nothing about external
-  // validity. Name the role for what it actually measures.
-  const multiTask = !!(result.meta?.tasks && result.meta.tasks.length > 1);
-  const hasHoldout = Core.availableDatasets(result).includes("verify");
-  const stabilityRole = multiTask && !hasHoldout ? "task-consistent" : "robust";
-  const roles = [
-    ["predictive", predictive],
-    ["balanced", by(competitive, "balanced")[0]],
-    ["interpretable", by(competitive, "interpretabilityEvidence")[0]],
-    [stabilityRole, by(competitive, "robustness")[0]],
-  ];
-  const recommendations = new Map();
-  for (const [role, item] of roles) {
-    if (!item) continue;
-    const existing = recommendations.get(item.rank) || { rank: item.rank, value: item.value, scores: item.scores, roles: [] };
-    existing.roles.push(role);
-    recommendations.set(item.rank, existing);
-  }
-  const limit = Math.max(1, Number(options.limit) || 5);
-  for (const item of [...by(eligible, "balanced"), ...by(competitive, "balanced")]) {
-    if (recommendations.size >= limit) break;
-    if (!recommendations.has(item.rank)) recommendations.set(item.rank, { rank: item.rank, value: item.value, scores: item.scores, roles: ["pareto-alternative"] });
-  }
   return {
     evaluation,
     methodology: {
-      balancedWeights: { performance: 0.50, robustness: 0.20, interpretabilityEvidence: 0.30 },
+      policy: "objective-evidence-shortlist-before-semantic-review",
       nearOptimalTolerance: tolerance,
+      performanceEnvelope: lowerIsBetter(evaluation.metric)
+        ? { maximum: best + scale * tolerance }
+        : { minimum: best - scale * tolerance },
       competitivePool: competitive.length,
-      // Expose what the stability score measures in this run, so a high score
-      // is not mistaken for external validation.
-      stability: {
-        role: stabilityRole,
-        basis: hasHoldout
-          ? "relative train/verify RMSE gap"
-          : "spread of per-task RMSE (all in-sample)",
-        externalValidation: hasHoldout,
-        note: hasHoldout
-          ? "Robust means the hold-out error is close to the training error."
-          : "No hold-out exists for this run. A high task-consistency score means the model fits every task about equally well; it is NOT evidence of generalisation.",
-      },
-      note: "Recommendations are an auditable shortlist, not an automatic claim of physical truth. Review feature provenance and domain constraints before acceptance.",
+      paretoObjectives: objectives.map(publicObjective),
+      candidateOrdering: "predictive best, then objective-space coverage by Pareto layer and crowding distance",
+      interpretabilityUsedInSelection: false,
+      robustnessClaimed: false,
+      note: "Candidates are retained using predictive evidence and Pareto rank only. Syntactic complexity, provenance, and semantic assessment are evidence for finalist review, not pre-selection scores.",
     },
-    paretoFront: pareto.front,
-    recommendations: [...recommendations.values()],
+    reviewProtocol: {
+      requiredJudgments: ["supported", "mixed", "concern", "unresolved", "not-assessable"],
+      dimensions: ["structural-coherence", "scientific-plausibility", "limiting-behavior", "redundancy-or-cancellation", "feature-interaction-meaning"],
+      requirements: [
+        "Cite calculated evidence, researcher metadata, and source context separately.",
+        "Include evidence for and against every candidate.",
+        "Do not convert semantic review into a 0-100 elegance score.",
+      ],
+    },
+    candidates,
   };
 }
 
@@ -248,12 +398,13 @@ export function analyzeDirectory(directory, options = {}) {
     unitManifestText: discovery.auxiliary?.unitManifestText,
     featureNames,
   });
-  const summaries = result.models.map((model) => summarizeModel(result, model, featureMetadata.features));
+  const summaries = result.models.map((model) => summarizeModel(result, model, featureMetadata.features, { evaluateObservedDomain: false }));
   return { discovery, health, result, featureMetadata, summaries };
 }
 
 export function buildBundle(analysis, options = {}) {
-  const { discovery, health, result, featureMetadata, summaries } = analysis;
+  const { discovery, health, result, featureMetadata } = analysis;
+  const detailedSummaries = result.models.map((model) => summarizeModel(result, model, featureMetadata.features));
   return {
     schemaVersion: SCHEMA_VERSION,
     kind: "sisso-sage-analysis",
@@ -270,8 +421,8 @@ export function buildBundle(analysis, options = {}) {
       supportedProblem: "regression",
     },
     health,
-    models: summaries,
-    selection: selectModels(result, summaries, options),
+    models: detailedSummaries,
+    selection: selectModels(result, detailedSummaries, options),
     provenance: {
       generator: "SISSO-Sage",
       generatorVersion: VERSION,

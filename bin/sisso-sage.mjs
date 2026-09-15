@@ -39,7 +39,7 @@ Usage:
   sisso-sage model <run> --rank 1
   sisso-sage compare <run> --ranks 1,2,3
   sisso-sage pareto <run> [--dataset verify] [--metric rmse]
-  sisso-sage select <run> [--limit 5] [--dataset verify] [--metric rmse]
+  sisso-sage select <run> [--limit 5] [--dataset verify] [--metric rmse] [--near-optimal-tolerance 0.10]
   sisso-sage bundle <run> --output analysis.bundle.json
   sisso-sage metadata-template <run> [--output sage.features.json]
   sisso-sage feature-doc <run> [--output FEATURES.md]
@@ -129,11 +129,11 @@ async function main() {
     return;
   }
   if (command === "pareto") {
-    printJson({ kind: "sisso-sage-pareto", ...paretoModels(analysis.result, { dataset: options.dataset, metric: options.metric }) }, options.compact);
+    printJson({ kind: "sisso-sage-pareto", ...paretoModels(analysis.result, { dataset: options.dataset, metric: options.metric }, analysis.summaries) }, options.compact);
     return;
   }
   if (command === "select") {
-    printJson({ kind: "sisso-sage-selection", ...selectModels(analysis.result, analysis.summaries, { dataset: options.dataset, metric: options.metric, limit: options.limit }) }, options.compact);
+    printJson({ kind: "sisso-sage-selection", ...selectModels(analysis.result, analysis.summaries, { dataset: options.dataset, metric: options.metric, limit: options.limit, nearOptimalTolerance: options.nearOptimalTolerance }) }, options.compact);
     return;
   }
   if (command === "bundle") {

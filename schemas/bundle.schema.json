@@ -5,7 +5,7 @@
   "type": "object",
   "required": ["schemaVersion", "kind", "generatedAt", "source", "run", "health", "models", "selection", "provenance"],
   "properties": {
-    "schemaVersion": { "const": "1.0.0" },
+    "schemaVersion": { "const": "2.0.0" },
     "kind": { "const": "sisso-sage-analysis" },
     "generatedAt": { "type": "string", "format": "date-time" },
     "source": { "type": "object" },
@@ -22,7 +22,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["rank", "descriptorDimension", "formulas", "descriptors", "features", "metrics", "interpretabilityEvidence"],
+        "required": ["rank", "descriptorDimension", "formulas", "descriptors", "features", "metrics", "formulaEvidence"],
         "properties": {
           "rank": { "type": "integer", "minimum": 1 },
           "descriptorDimension": { "type": "integer", "minimum": 1 },
@@ -30,9 +30,9 @@
           "descriptors": { "type": "array" },
           "features": { "type": "array", "items": { "type": "string" } },
           "metrics": { "type": "object" },
-          "interpretabilityEvidence": {
+          "formulaEvidence": {
             "type": "object",
-            "required": ["score", "status", "components", "risks", "limitation"]
+            "required": ["structure", "domain", "provenance", "semanticAssessment"]
           }
         }
       }

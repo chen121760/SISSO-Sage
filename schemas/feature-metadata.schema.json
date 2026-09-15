@@ -10,6 +10,7 @@
       "type": "object",
       "additionalProperties": {
         "type": "object",
+        "required": ["reviewStatus"],
         "properties": {
           "description": { "type": "string" },
           "symbol": { "type": "string" },

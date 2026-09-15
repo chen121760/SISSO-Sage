@@ -40,13 +40,13 @@ const readOnlyAnnotations = {
 
 function resultMessage(result) {
   if (result.kind === "sisso-sage-inspection") {
-    return `Inspected SISSO run: health=${result.health?.level || "unknown"}, models=${result.run?.nModels ?? "unknown"}, metadata=${result.featureMetadata?.resolvedFeatures ?? 0}/${result.featureMetadata?.totalFeatures ?? 0}.`;
+    return `Inspected SISSO run: health=${result.health?.level || "unknown"}, models=${result.run?.nModels ?? "unknown"}, confirmed metadata=${result.featureMetadata?.resolvedFeatures ?? 0}/${result.featureMetadata?.totalFeatures ?? 0}, documented=${result.featureMetadata?.documentedFeatures ?? 0}.`;
   }
   if (result.kind === "sisso-sage-model-list") return `Returned ${result.returned} of ${result.total} matching models${result.truncated ? " (truncated)" : ""}.`;
   if (result.kind === "sisso-sage-model") return `Returned evidence for model rank ${result.model.rank}.`;
   if (result.kind === "sisso-sage-comparison") return `Compared model ranks ${result.ranks.join(", ")}.`;
   if (result.kind === "sisso-sage-pareto") return `Returned ${result.front.length} Pareto-front models from ${result.eligibleModels} eligible models.`;
-  if (result.kind === "sisso-sage-selection") return `Returned ${result.recommendations.length} auditable model candidates.`;
+  if (result.kind === "sisso-sage-selection") return `Returned ${result.candidates.length} objective-evidence model candidates for semantic review.`;
   if (result.kind === "sisso-sage-feature-context") return `Feature source trace status: ${result.status}.`;
   if (result.kind === "sisso-sage-leakage") {
     return `Leakage check (${result.mode}): verdict=${result.verdict}` +
@@ -87,7 +87,7 @@ export function createSissoSageMcpServer(options = {}) {
   const server = new McpServer(
     { name: "sisso-sage", version: VERSION },
     {
-      instructions: "Start every run analysis with inspect_run. Stop model selection if health is error. Prefer holdout metrics, report per-task and aggregate MT evidence, inspect multiple finalists, and never infer physical meaning from an ambiguous feature name. Use feature_context or request original extraction code before making physical claims.",
+      instructions: "Start every run analysis with inspect_run and stop if health is error. When verify.dat exists, call check_leakage before selection and do not treat a non-independent split as external validation. Use select_candidates only as an objective-evidence shortlist, then compare multiple finalists. Report per-task and aggregate MT evidence. Review formulaEvidence and use feature_context before physical claims; never infer meaning from an ambiguous name or emit a scalar elegance score.",
     },
   );
 
@@ -115,14 +115,14 @@ export function createSissoSageMcpServer(options = {}) {
     inputSchema: {
       ...runInput,
       limit: z.number().int().min(1).max(MODEL_LIST_HARD_CAP).optional(),
-      sort: z.string().optional().describe("rank, interpretability, or dataset.metric such as verify.rmse or t1.rmse."),
+      sort: z.string().optional().describe("rank, structure.astNodeCount, or dataset.metric such as verify.rmse or t1.rmse. Interpretability is not a scalar sort key."),
       feature: z.string().optional().describe("Only return models using this exact primitive feature name."),
     },
   }, (input) => listModelsResult(cache.load(input.run, input), input));
 
   registerReadTool(server, "get_model", {
     title: "Get one SISSO model",
-    description: "Retrieve formulas, descriptors, metrics, primitive features, provenance coverage, interpretability evidence, and numerical-domain risks for one model rank.",
+    description: "Retrieve formulas, descriptors, metrics, primitive features, structural evidence, observed-domain checks, provenance confidence, and the semantic-review rubric for one model rank.",
     inputSchema: { ...runInput, rank: z.number().int().positive() },
   }, (input) => modelResult(cache.load(input.run, input), input.rank));
 
@@ -137,7 +137,7 @@ export function createSissoSageMcpServer(options = {}) {
 
   registerReadTool(server, "pareto_frontier", {
     title: "Find the SISSO Pareto frontier",
-    description: "Find models not dominated on prediction metric and symbolic complexity. Use to expose performance-complexity alternatives.",
+    description: "Return Pareto layers over predictive performance and target-normalized generalization gap when holdout data exist; otherwise use syntactic complexity as an explicitly in-sample fallback.",
     inputSchema: {
       ...runInput,
       dataset: z.string().optional().describe("Dataset key such as verify, train, t1, or sisso-overall."),
@@ -147,7 +147,7 @@ export function createSissoSageMcpServer(options = {}) {
 
   registerReadTool(server, "select_candidates", {
     title: "Select SISSO model candidates",
-    description: "Create an auditable multi-role shortlist covering predictive, balanced, interpretable, robust, and Pareto-alternative candidates. This is not a claim of physical truth.",
+    description: "Create a strict-size shortlist using predictive evidence, a near-optimal performance envelope, and Pareto rank only. Interpretability and provenance do not pre-filter candidates; an LLM/researcher reviews the returned finalists with the supplied rubric.",
     inputSchema: {
       ...runInput,
       dataset: z.string().optional().describe("Dataset key such as verify, train, t1, or sisso-overall."),
@@ -159,7 +159,7 @@ export function createSissoSageMcpServer(options = {}) {
 
   registerReadTool(server, "feature_context", {
     title: "Trace a SISSO feature",
-    description: "Retrieve metadata and exact identifier matches in feature-extraction source before interpreting a primitive feature. An unresolved result requires researcher input rather than guessing.",
+    description: "Retrieve metadata, bounded source snippets, and a referenced Python function body when available before interpreting a primitive feature. An unresolved result requires researcher input rather than guessing.",
     inputSchema: {
       ...runInput,
       feature: z.string().min(1),

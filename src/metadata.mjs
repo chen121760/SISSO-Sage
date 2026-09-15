@@ -5,9 +5,14 @@ const DEFAULT_NAMES = ["sage.features.json", "feature-metadata.json"];
 
 function normalizeFeatureRecords(raw) {
   const source = raw?.features ?? raw ?? {};
-  if (Array.isArray(source)) return Object.fromEntries(source.filter((item) => item?.name).map((item) => [item.name, { ...item }]));
+  const normalize = (name, value) => ({
+    name,
+    ...(value || {}),
+    reviewStatus: value?.reviewStatus || "needs-user-confirmation",
+  });
+  if (Array.isArray(source)) return Object.fromEntries(source.filter((item) => item?.name).map((item) => [item.name, normalize(item.name, item)]));
   if (!source || typeof source !== "object") throw new Error("Feature metadata must contain an object or array of features.");
-  return Object.fromEntries(Object.entries(source).map(([name, value]) => [name, { name, ...(value || {}) }]));
+  return Object.fromEntries(Object.entries(source).map(([name, value]) => [name, normalize(name, value)]));
 }
 
 // Split one CSV line into trimmed fields (RFC4180 quoting, no embedded newlines).
@@ -164,6 +169,18 @@ function pickColumn(row, aliases) {
   return "";
 }
 
+function dictionarySource(source, sourceRoot) {
+  const label = String(source || "").trim();
+  if (!label) return { label: "", root: sourceRoot || "" };
+  const [file, functionName] = label.split(/\s*::\s*/, 2);
+  return {
+    label,
+    root: sourceRoot || "",
+    ...(file ? { file } : {}),
+    ...(functionName ? { function: functionName } : {}),
+  };
+}
+
 function dictionaryFeatures(dictionaryText, renameText, sourceRoot) {
   if (!dictionaryText) return {};
   const rename = new Map((renameText ? csvRows(renameText) : []).map((row) => [row.old, row.new]));
@@ -181,7 +198,7 @@ function dictionaryFeatures(dictionaryText, renameText, sourceRoot) {
       description: pickColumn(row, DICTIONARY_ALIASES.note),
       ...(unit ? { unit } : {}),
       category: group,
-      source: { label: source, root: sourceRoot || "" },
+      source: dictionarySource(source, sourceRoot),
       reviewStatus: "imported-documentation",
       evidence: [{ kind: "feature-dictionary", feature: rawName }],
     };
@@ -238,8 +255,9 @@ export function loadFeatureMetadata(runDirectory, explicitPath, options = {}) {
   }
   const runFeatures = options.featureNames || [];
   if (runFeatures.length) features = Object.fromEntries(runFeatures.map((name) => [name, features[name] || { name, reviewStatus: "needs-user-confirmation" }]));
-  const resolvedStatuses = new Set(["confirmed", "imported-documentation"]);
+  const resolvedStatuses = new Set(["confirmed"]);
   const resolved = runFeatures.filter((name) => resolvedStatuses.has(features[name]?.reviewStatus)).length;
+  const documented = runFeatures.filter((name) => ["confirmed", "imported-documentation"].includes(features[name]?.reviewStatus)).length;
   const warnings = [];
   // A dictionary that was found but yielded nothing is far more likely to be a
   // column-naming mistake than a deliberate empty file, so say so explicitly.
@@ -255,6 +273,7 @@ export function loadFeatureMetadata(runDirectory, explicitPath, options = {}) {
     expectedDictionaryColumns: DICTIONARY_COLUMNS,
     schemaVersion,
     resolvedFeatures: resolved,
+    documentedFeatures: documented,
     totalFeatures: runFeatures.length,
   };
 }

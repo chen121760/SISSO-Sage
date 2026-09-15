@@ -6,6 +6,7 @@
       "symbol": "E_g",
       "unit": "eV",
       "category": "electronic",
+      "reviewStatus": "confirmed",
       "source": {
         "file": "features/electronic.py",
         "function": "extract_band_gap",

@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- Replaced percentile, balanced, robustness, and scalar interpretability scores
+  with a strict near-optimal shortlist and layered Pareto evidence.
+- Added signed, absolute, relative, and target-normalized generalization-gap
+  diagnostics; missing holdout evidence is now `not-assessable`.
+- Split formula evidence into syntactic structure, observed/deployment domain,
+  provenance confidence, and categorical semantic review.
+- Evaluate constrained subexpressions over every supplied dataset instead of
+  penalizing the presence of division, log, sqrt, exponential, or negative power.
+- Respect feature `reviewStatus`; missing states are unresolved, and imported
+  documentation is distinguished from researcher confirmation.
+- Expanded feature source tracing with bounded context and referenced Python
+  function bodies.
+- Reworked the English and Simplified Chinese READMEs as concise ordinary-user
+  entry points with reciprocal GitHub language navigation; detailed commands
+  remain in the AI-facing guide and Skill.
+
 ## 0.3.1
 
 Documentation and no-install clarity.
