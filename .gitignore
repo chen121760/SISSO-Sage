@@ -3,3 +3,9 @@ coverage/
 *.bundle.json
 *.tmp
 .DS_Store
+.env
+.env.*
+!.env.example
+*.jev.plan.json
+*.jev.scores.json
+*.checkpoint.jsonl

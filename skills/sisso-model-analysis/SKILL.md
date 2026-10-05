@@ -28,3 +28,21 @@ Use the SISSO-Sage MCP tools to turn a completed SISSO run into an auditable sho
 - Assess `structural-coherence`, `scientific-plausibility`, `limiting-behavior`, `redundancy-or-cancellation`, and `feature-interaction-meaning` using only `supported`, `mixed`, `concern`, `unresolved`, or `not-assessable`. Cite evidence and counterevidence for each finalist.
 
 Use `list_models` or `pareto_frontier` when the user asks to explore beyond the initial shortlist.
+
+## Optional Jev screening
+
+When the user requests Jev, use the CLI workflow in `docs/JEV.zh-CN.md` after
+inspection and feature-source review. Prepare `sage.research.json`, run
+`jev-plan`, and check full coverage before `jev-score`. The score command sends
+formula evidence to the TypeSafe API; read the key from `TYPESAFE_API_KEY` and
+never write credentials into a plan or report. Preserve checkpoints and use
+`--resume` to reuse unchanged evidence.
+
+Jev returns separate experimental semantic grades with explicit missing-evidence
+and uncertainty states. These are provisional scientific judgments, not a
+universal elegance score or physical acceptance. Use `jev-select`/`jev-report`,
+then inspect each finalist against the correct `--top-file` and its extraction
+sources. Explain every formula with supporting evidence, counterevidence and
+conditions. Jev cannot generate that explanation. Calibrate against researcher
+examples before trusting its ordering; retain the original objective shortlist
+as a comparison. Existing MCP tools stay local and read-only.

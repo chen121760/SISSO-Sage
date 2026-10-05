@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0.0",
+  "_instructions": "Fill the target definition and supply actual scientific evidence. Empty fields remain unassessable. Prefer English for Jev. Have the agent trace features into sage.features.json and the original extraction source first.",
+  "target": {
+    "description": "",
+    "unit": "",
+    "reviewStatus": "needs-user-confirmation"
+  },
+  "researchQuestion": "",
+  "deployment": {
+    "description": "",
+    "predictionTime": "",
+    "featureAcquisition": {},
+    "constraints": []
+  },
+  "referenceEvidence": [],
+  "formulaReviews": {}
+}

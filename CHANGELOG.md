@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added optional TypeSafe Jev multi-dimensional semantic screening for all fitted
+  top/coeff pairs in the selected Models directory, including cross-dimension
+  model identities and explicit full/partial coverage.
+- Added local request plans, pinned-model API calls, response validation,
+  bounded concurrency, retry/backoff, evidence-hashed checkpoints and resume.
+- Added prediction-constrained, diverse semantic-review shortlists and Markdown
+  review packets; missing evidence and uncertainty remain separate from grades.
+- Added an API-access/setup guide, research-context template/schema, privacy
+  boundaries and offline integration tests. No live Jev/SISSO calibration has
+  been performed; rubrics and thresholds remain experimental.
 - Replaced percentile, balanced, robustness, and scalar interpretability scores
   with a strict near-optimal shortlist and layered Pareto evidence.
 - Added signed, absolute, relative, and target-normalized generalization-gap
