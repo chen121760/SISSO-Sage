@@ -7,9 +7,30 @@ function distribution(answer, keys, label) {
     || !Number.isFinite(p[key]) || p[key] < 0 || p[key] > 1)) {
     throw new Error(`Invalid Jev probability distribution: ${label}.`);
   }
-  if (Math.abs(Object.values(p).reduce((sum, value) => sum + value, 0) - 1) > 1e-4) {
+  // Live responses serialize probabilities and scores to two decimal places.
+  // Validate whether a normalized underlying distribution can round to them.
+  const rounded = Object.values(p).every((value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-8);
+  const margin = rounded ? 0.005 : 1e-4 / keys.length;
+  const lower = keys.map((key) => Math.max(0, p[key] - margin));
+  const upper = keys.map((key) => Math.min(1, p[key] + margin));
+  if (lower.reduce((sum, value) => sum + value, 0) > 1 + 1e-8
+    || upper.reduce((sum, value) => sum + value, 0) < 1 - 1e-8) {
     throw new Error(`Jev probabilities do not sum to one: ${label}.`);
   }
+  return { rounded, lower, upper };
+}
+
+function expectationBound(lower, upper, descending) {
+  const values = [...lower];
+  let remaining = Math.max(0, 1 - values.reduce((sum, value) => sum + value, 0));
+  const indices = values.map((_, i) => i);
+  if (descending) indices.reverse();
+  for (const i of indices) {
+    const added = Math.min(remaining, upper[i] - values[i]);
+    values[i] += added;
+    remaining -= added;
+  }
+  return values.reduce((sum, value, i) => sum + i * value, 0);
 }
 
 export function validateJevResponse(response, request) {
@@ -24,14 +45,16 @@ export function validateJevResponse(response, request) {
     if (!answer || answer.type !== question.type || !Number.isFinite(answer.confidence)
       || answer.confidence < 0 || answer.confidence > 1) throw new Error(`Invalid Jev answer: ${id}.`);
     const keys = question.type === "score" ? question.criteria.map((_, i) => String(i)) : Object.keys(question.criteria);
-    distribution(answer, keys, id);
+    const bounds = distribution(answer, keys, id);
     if (question.type === "score") {
-      const expected = keys.reduce((sum, key) => sum + Number(key) * answer.probabilities[key], 0);
-      if (!Number.isFinite(answer.score) || Math.abs(answer.score - expected) > 1e-4) {
+      const scoreMargin = bounds.rounded && Math.abs(answer.score * 100 - Math.round(answer.score * 100)) < 1e-8 ? 0.005 : 1e-4;
+      if (!Number.isFinite(answer.score) || answer.score < 0 || answer.score > keys.length - 1
+        || answer.score + scoreMargin < expectationBound(bounds.lower, bounds.upper, false) - 1e-8
+        || answer.score - scoreMargin > expectationBound(bounds.lower, bounds.upper, true) + 1e-8) {
         throw new Error(`Invalid Jev score expectation: ${id}.`);
       }
     } else if (!keys.includes(answer.choice)
-      || answer.probabilities[answer.choice] < Math.max(...Object.values(answer.probabilities)) - 1e-4) {
+      || answer.probabilities[answer.choice] < Math.max(...Object.values(answer.probabilities)) - (bounds.rounded ? 0.01 + 1e-8 : 1e-4)) {
       throw new Error(`Invalid Jev choice: ${id}.`);
     }
   }

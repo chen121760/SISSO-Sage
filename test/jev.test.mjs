@@ -37,6 +37,18 @@ function response(request, { level = 2, availability = "assessable", confidence 
   ])), usage: { input_tokens: 1000, output_tokens: 100 } };
 }
 
+test("response validation accepts rounded API distributions but rejects impossible scores and probability mass", () => {
+  const request = { model: JEV_MODEL, questions: { grade: { type: "score", criteria: ["a", "b", "c", "d"] } } };
+  const make = (probabilities, score) => ({ model: JEV_MODEL, answers: { grade: { type: "score", probabilities, score, confidence: 0.9 } } });
+  // Captured live response: the provider score uses probabilities before rounding.
+  validateJevResponse(make({ 0: 0.02, 1: 0.9, 2: 0.08, 3: 0 }, 1.07), request);
+  validateJevResponse(make({ 0: 0.11, 1: 0.01, 2: 0.3, 3: 0.58 }, 2.37), request);
+  validateJevResponse(make({ 0: 0.01, 1: 0.92, 2: 0.07, 3: 0.01 }, 1.07), request);
+  assert.throws(() => validateJevResponse(make({ 0: 0.02, 1: 0.9, 2: 0.08, 3: 0 }, 1.2), request), /expectation/);
+  assert.throws(() => validateJevResponse(make({ 0: 0.02, 1: 0.9, 2: 0.08, 3: 0.1 }, 1.07), request), /sum/);
+  assert.throws(() => validateJevResponse(make({ 0: 0, 1: 0, 2: 1, 3: 0 }, 2.03), request), /expectation/);
+});
+
 test("plan covers every fitted candidate, audits domains, traces definitions, and deduplicates identical requests", (t) => {
   const root = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

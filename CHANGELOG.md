@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed live Jev response validation to account for two-decimal serialized
+  probabilities and scores while checking feasible normalized expectations.
+- Exercised the live workflow on 2,000 exported formulas across multi-task and
+  held-out single-task cases, independently recomputed all metrics, and verified
+  checkpoint recovery. This integration test does not calibrate semantic grades.
+
 - Added optional TypeSafe Jev multi-dimensional semantic screening for all fitted
   top/coeff pairs in the selected Models directory, including cross-dimension
   model identities and explicit full/partial coverage.
