@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Fixed live Jev response validation to account for two-decimal serialized
+  probabilities and scores while checking feasible normalized expectations.
+- Exercised the live workflow on 2,000 exported formulas across multi-task and
+  held-out single-task cases, independently recomputed all metrics, and verified
+  checkpoint recovery. This integration test does not calibrate semantic grades.
+
+- Added optional TypeSafe Jev multi-dimensional semantic screening for all fitted
+  top/coeff pairs in the selected Models directory, including cross-dimension
+  model identities and explicit full/partial coverage.
+- Added local request plans, pinned-model API calls, response validation,
+  bounded concurrency, retry/backoff, evidence-hashed checkpoints and resume.
+- Added prediction-constrained, diverse semantic-review shortlists and Markdown
+  review packets; missing evidence and uncertainty remain separate from grades.
+- Added an API-access/setup guide, research-context template/schema, privacy
+  boundaries and offline integration tests. No live Jev/SISSO calibration has
+  been performed; rubrics and thresholds remain experimental.
 - Replaced percentile, balanced, robustness, and scalar interpretability scores
   with a strict near-optimal shortlist and layered Pareto evidence.
 - Added signed, absolute, relative, and target-normalized generalization-gap

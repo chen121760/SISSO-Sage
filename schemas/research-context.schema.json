@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SISSO-Sage Jev research context",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "target": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "unit": { "type": "string" },
+        "reviewStatus": { "enum": ["confirmed", "imported-documentation", "ai-draft", "needs-user-confirmation"] }
+      }
+    },
+    "researchQuestion": { "type": "string" },
+    "deployment": { "type": ["object", "null"] },
+    "referenceEvidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "claim", "source", "kind"],
+        "properties": {
+          "id": { "type": "string" },
+          "claim": { "type": "string" },
+          "source": { "type": "string" },
+          "kind": { "enum": ["researcher-supplied", "source-document", "calculated", "ai-draft"] }
+        }
+      }
+    },
+    "formulaReviews": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "reviewStatus": { "enum": ["confirmed", "imported-documentation", "ai-draft", "needs-user-confirmation"] },
+          "interpretation": { "type": "string" },
+          "assumptions": { "type": "array", "items": { "type": "string" } },
+          "referenceIds": { "type": "array", "items": { "type": "string" } },
+          "calculatedTrends": { "type": "array" }
+        }
+      }
+    }
+  }
+}

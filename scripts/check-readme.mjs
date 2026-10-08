@@ -26,6 +26,8 @@ ok("both ask the user to provide SISSO output", english.includes("SISSO output")
 ok("both ask the user to provide feature-extraction code", english.includes("feature-extraction") && chinese.includes("特征提取"));
 ok("both hand command execution to the AI assistant", english.includes("AI assistant will run") && chinese.includes("命令由 AI 老师自行执行"));
 ok("both state the local privacy boundary", english.includes("does not\nupload your data") && chinese.includes("不会上传你的数据"));
+ok("both state optional Jev uploads", english.includes("TypeSafe API") && chinese.includes("TypeSafe API"));
+ok("both link to the Jev setup guide", [english, chinese].every((text) => text.includes("docs/JEV.zh-CN.md")));
 
 const maxLines = 90;
 ok(`English README stays under ${maxLines} lines`, english.split(/\r?\n/).length <= maxLines);

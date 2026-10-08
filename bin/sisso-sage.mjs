@@ -5,6 +5,8 @@ import process from "node:process";
 import { analyzeDirectory, buildBundle, paretoModels, selectModels } from "../src/analysis.mjs";
 import { CAPABILITIES } from "../src/capabilities.mjs";
 import { featureMetadataTemplate } from "../src/metadata.mjs";
+import { planJevReview, readResearchContext, scoreJevPlan } from "../src/jev.mjs";
+import { selectJevCandidates, jevReviewMarkdown } from "../src/jev-selection.mjs";
 import {
   comparisonResult,
   featureContextResult,
@@ -44,6 +46,10 @@ Usage:
   sisso-sage metadata-template <run> [--output sage.features.json]
   sisso-sage feature-doc <run> [--output FEATURES.md]
   sisso-sage feature-context <run> --feature name --source-root /path/to/source
+  sisso-sage jev-plan <run> [--context sage.research.json] [--source-root <dir>] [--output review.jev.plan.json]
+  sisso-sage jev-score <run> [--context sage.research.json] [--source-root <dir>] [--resume] [--output review.jev.scores.json]
+  sisso-sage jev-select <review.jev.scores.json> [--limit 5] [--near-optimal-tolerance 0.10]
+  sisso-sage jev-report <review.jev.scores.json> [--output review.jev.md]
   sisso-sage capabilities
 
 Metadata options:
@@ -56,6 +62,13 @@ Metadata options:
 Notes:
   --limit accepts any positive integer (hard cap 100000). Responses carry
   "returned", "limit" and "truncated" so a truncated list is never silent.
+  Jev commands cover all fitted top/coeff pairs in the selected Models directory.
+  --top-file selects just one pair. --limit on jev-plan/score explicitly limits coverage.
+  jev-score uploads formula evidence to TypeSafe; TYPESAFE_API_KEY is read from the environment.
+  --jev-model defaults to jev-1.13.0; --concurrency defaults to 4 (1-16).
+  --checkpoint <jsonl> defaults to <output>.checkpoint.jsonl; --resume reuses matching requests.
+  --confidence-threshold defaults to 0.6 (provisional, not SISSO-calibrated).
+  jev-plan, jev-select and jev-report are local and need no API key.
 
 All data commands emit JSON. Use --compact for token-efficient output.`;
 }
@@ -105,6 +118,50 @@ async function main() {
 
   const directory = positional[1];
   if (!directory) throw new Error(`Missing run directory.\n\n${usage()}`);
+  if (command === "jev-select" || command === "jev-report") {
+    const report = JSON.parse(fs.readFileSync(path.resolve(directory), "utf8").replace(/^\uFEFF/, ""));
+    const selection = selectJevCandidates(report, options);
+    if (command === "jev-select" && !options.output) { printJson(selection, options.compact); return; }
+    const output = path.resolve(options.output || "review.jev.md");
+    if (output === path.resolve(directory)) throw new Error("Output must not overwrite the input scores report.");
+    fs.writeFileSync(output, command === "jev-report" ? jevReviewMarkdown(selection) : `${JSON.stringify(selection, null, 2)}\n`, "utf8");
+    printJson({ kind: `sisso-sage-${command}-written`, output, candidates: selection.candidates.length }, options.compact);
+    return;
+  }
+  if (command === "jev-plan" || command === "jev-score") {
+    const context = readResearchContext(options.context);
+    const plan = planJevReview(directory, { ...analysisOptions(options), context, model: options.jevModel, limit: options.limit });
+    const output = path.resolve(options.output || (command === "jev-plan" ? "review.jev.plan.json" : "review.jev.scores.json"));
+    const checkpoint = path.resolve(options.checkpoint || `${output}.checkpoint.jsonl`);
+    const protectedPaths = [...plan.inputFiles, directory, options.context, options.features, options.verify, options.topFile, options.featureDictionary, options.renameMap]
+      .filter((value) => typeof value === "string").map((value) => path.resolve(value).toLowerCase());
+    if (protectedPaths.includes(output.toLowerCase()) || protectedPaths.includes(checkpoint.toLowerCase()) || checkpoint.toLowerCase() === output.toLowerCase()) {
+      throw new Error("Output/checkpoint must not overwrite an input file or each other.");
+    }
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    if (command === "jev-plan") {
+      fs.writeFileSync(output, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+      printJson({ kind: "sisso-sage-jev-plan-written", output, coverage: plan.coverage, costEstimate: plan.costEstimate }, options.compact);
+      return;
+    }
+    let lastProgress = 0;
+    const report = await scoreJevPlan(plan, {
+      checkpoint, resume: options.resume === true,
+      concurrency: options.concurrency === undefined ? undefined : Number(options.concurrency),
+      confidenceThreshold: options.confidenceThreshold === undefined ? undefined : Number(options.confidenceThreshold),
+      onProgress: (progress) => {
+        const now = Date.now();
+        if (now - lastProgress >= 2000 || progress.completed + progress.failed === progress.total) {
+          process.stderr.write(`Jev: ${progress.completed}/${progress.total} completed, ${progress.failed} failed\n`);
+          lastProgress = now;
+        }
+      },
+    });
+    fs.writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    printJson({ kind: "sisso-sage-jev-scores-written", output, coverage: report.coverage, execution: report.execution }, options.compact);
+    if (report.coverage.errors) process.exitCode = 1;
+    return;
+  }
   const analysis = analyzeDirectory(directory, analysisOptions(options));
 
   if (command === "inspect") {

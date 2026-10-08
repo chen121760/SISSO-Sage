@@ -72,6 +72,11 @@ export function traceFeatureSource(feature, sourceRoot, options = {}) {
   const escaped = feature.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const exactIdentifier = new RegExp(`(^|[^A-Za-z0-9_])${escaped}([^A-Za-z0-9_]|$)`);
   const preferred = preferredDefinition(root, options.preferredSource);
+  if (options.preferredOnly && preferred) {
+    return { feature, sourceRoot: root, status: "context-found", preferredDefinition: preferred,
+      matches: [], truncated: false,
+      limitation: "The referenced definition was read directly. Source context is evidence, not an authoritative physical interpretation." };
+  }
   const stack = [root];
   while (stack.length && matches.length < limit) {
     const current = stack.pop();

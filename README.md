@@ -58,8 +58,14 @@ separate but complementary tools that can examine the same SISSO results.
 
 ## Requirements and privacy
 
-Node.js 18 or newer is sufficient. Analysis runs locally, and SISSO-Sage does not
+Node.js 18 or newer is sufficient. Default analysis runs locally and does not
 upload your data.
+
+Optional Jev screening sends formula evidence to the TypeSafe API and provides
+separate semantic grades, checkpoint/resume, and candidate review packets. See
+the [Jev setup guide (Chinese)](docs/JEV.zh-CN.md) for API access and commands.
+The rubrics need researcher calibration; an AI assistant and researcher complete
+the scientific interpretation.
 
 For AI workflow details, see [AI_GUIDE.md](AI_GUIDE.md). Development and release
 changes are recorded in [CHANGELOG.md](CHANGELOG.md).

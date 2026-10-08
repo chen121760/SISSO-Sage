@@ -51,7 +51,11 @@ Sage 适合让 AI 老师进行证据审查。二者相互独立，但可以分�
 
 ## 环境与隐私
 
-只需要 Node.js 18 或更高版本。所有分析均在本地运行，SISSO-Sage 不会上传你的数据。
+只需要 Node.js 18 或更高版本。默认分析在本地运行，不会上传你的数据。
+
+可选的 Jev 全量语义评价会将公式证据发送到 TypeSafe API，提供多维评分、
+断点续跑和候选审查报告。申请 API 与使用方法见 [Jev 指南](docs/JEV.zh-CN.md)。
+评分标准仍需研究者校准，最终公式解释由 AI 老师和研究者完成。
 
 AI 工作流程详见 [AI_GUIDE.md](AI_GUIDE.md)，开发与版本变化记录在 [CHANGELOG.md](CHANGELOG.md)。
 

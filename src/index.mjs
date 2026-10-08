@@ -21,3 +21,7 @@ export {
   MODEL_LIST_HARD_CAP,
 } from "./service.mjs";
 export { VERSION } from "./version.mjs";
+export { buildJevPlan, planJevReview, loadJevAnalyses, readResearchContext, scoreJevPlan, jevHash } from "./jev.mjs";
+export { callJev, validateJevResponse } from "./jev-client.mjs";
+export { selectJevCandidates, jevReviewMarkdown } from "./jev-selection.mjs";
+export { JEV_DIMENSIONS, JEV_MODEL, JEV_RUBRIC_VERSION, jevQuestions } from "./jev-rubric.mjs";

@@ -38909,7 +38909,11 @@ var CAPABILITIES = {
     bundle: "Write the complete AI-readable analysis bundle.",
     "metadata-template": "Create a feature-provenance template for the run.",
     "feature-doc": "Write a reviewable Markdown feature dictionary and flag unresolved names.",
-    "feature-context": "Find exact references to one feature in the supplied extraction source tree."
+    "feature-context": "Find exact references to one feature in the supplied extraction source tree.",
+    "jev-plan": "Write a local, auditable all-fitted-model Jev request plan; no key or network required.",
+    "jev-score": "Call TypeSafe Jev for experimental multi-dimensional semantic screening; local metrics, checkpoint/resume and explicit coverage.",
+    "jev-select": "Shortlist scored formulas within a predictive near-optimal envelope using separate semantic dimensions and descriptor diversity.",
+    "jev-report": "Write a formula/metrics/feature/semantic evidence review packet for agent and researcher interpretation."
   },
   mcpTools: {
     get_capabilities: "Discover the MCP workflow and decision policy.",
@@ -38926,10 +38930,18 @@ var CAPABILITIES = {
     featureDictionary: ["feature", "note", "unit", "group", "source"],
     renameMap: ["old", "new"]
   },
+  jev: {
+    interface: "CLI and exported JavaScript API; existing MCP tools remain local",
+    defaultModel: "jev-1.13.0",
+    credentials: "TYPESAFE_API_KEY environment variable; never serialized into plans or reports",
+    privacy: "Only jev-score sends formula evidence, supplied context and relevant extraction snippets to https://api.typesafe.ai/v1/systemone. No raw sample rows are sent.",
+    status: "Experimental; rubrics and confidence thresholds require researcher calibration on SISSO formulas.",
+    documentation: "docs/JEV.zh-CN.md"
+  },
   decisionPolicy: [
     "Use deterministic metrics and validation results as evidence.",
     "Check hold-out independence before quoting any hold-out metric as generalisation.",
-    "Do not calculate or rank by a scalar interpretability or elegance score.",
+    "Do not calculate or rank by a universal scalar interpretability or elegance score. Optional Jev rubric scores remain separate experimental semantic judgments.",
     "Prefer a shortlist over a single winner.",
     "Require human review of provenance, units, constraints, and extrapolation risks.",
     "Mark ambiguous feature meanings as unresolved instead of inferring them from names alone.",
@@ -40317,6 +40329,17 @@ function traceFeatureSource(feature, sourceRoot, options = {}) {
   const escaped = feature.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const exactIdentifier = new RegExp(`(^|[^A-Za-z0-9_])${escaped}([^A-Za-z0-9_]|$)`);
   const preferred = preferredDefinition(root, options.preferredSource);
+  if (options.preferredOnly && preferred) {
+    return {
+      feature,
+      sourceRoot: root,
+      status: "context-found",
+      preferredDefinition: preferred,
+      matches: [],
+      truncated: false,
+      limitation: "The referenced definition was read directly. Source context is evidence, not an authoritative physical interpretation."
+    };
+  }
   const stack = [root];
   while (stack.length && matches.length < limit) {
     const current = stack.pop();
