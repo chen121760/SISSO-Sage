@@ -4,6 +4,14 @@
 
 SISSO-Sage 帮助 AI 老师检查已经完成的 SISSO 计算，并从中找出几条有科学依据的候选公式。普通用户不需要学习工具命令，也不需要理解内部评分规则。
 
+## 视频演示
+
+[![SISSO-Analyzer 与 SISSO-Sage 演示](docs/promo/cover.png)](https://chen121760.github.io/SISSO-Analyzer/promo/)
+
+**[观看完整视频](https://chen121760.github.io/SISSO-Analyzer/promo/)** · 英文旁白 · 1080p · 48 秒
+
+[下载 MP4](https://chen121760.github.io/SISSO-Analyzer/promo/sisso-promo-en.mp4) · [英文字幕](docs/promo/sisso-promo-en.srt)
+
 ## 如何使用
 
 1. 下载本项目：

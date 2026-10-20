@@ -6,6 +6,14 @@ SISSO-Sage helps an AI assistant inspect a completed SISSO run and identify
 several scientifically defensible candidate formulas. You do not need to learn
 its commands or scoring rules.
 
+## Watch the video
+
+[![Watch SISSO-Analyzer and SISSO-Sage in action](docs/promo/cover.png)](https://chen121760.github.io/SISSO-Analyzer/promo/)
+
+**[Watch the overview](https://chen121760.github.io/SISSO-Analyzer/promo/)** · English narration · 1080p · 48 sec
+
+[Download MP4](https://chen121760.github.io/SISSO-Analyzer/promo/sisso-promo-en.mp4) · [English subtitles](docs/promo/sisso-promo-en.srt)
+
 ## Use it
 
 1. Download this repository:
