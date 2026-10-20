@@ -1,28 +1,52 @@
 1
-00:00:00,350 --> 00:00:04,397
-SISSO doesn't hand you an answer. It hands you a pile of candidates.
+00:00:02,850 --> 00:00:06,897
+SISSO doesn't hand you an answer. It hands
+you a pile of candidates.
 
 2
-00:00:04,777 --> 00:00:09,582
-Metrics to line up by hand. And the best training fit may not be the best model.
+00:00:07,277 --> 00:00:12,082
+Metrics to line up by hand. And the best
+training fit may not be the best model.
 
 3
-00:00:09,962 --> 00:00:18,541
-SISSO-Analyzer puts every candidate in one table: sortable metrics, a Pareto front, and the full formula behind every point.
+00:00:12,462 --> 00:00:17,141
+SISSO-Analyzer puts every candidate in one
+table: sortable metrics,
 
 4
-00:00:18,921 --> 00:00:25,808
-Open one: predictions, residuals, comparisons. Copy it as LaTeX, straight into your paper.
+00:00:17,141 --> 00:00:21,041
+a Pareto front, and the full formula
+behind every point.
 
 5
-00:00:26,188 --> 00:00:34,963
-SISSO-Sage gives your agent the evidence: shortlist models that balance prediction with physical meaning, and trace each feature to its source.
+00:00:21,421 --> 00:00:24,981
+Open one: predictions, residuals,
+comparisons.
 
 6
-00:00:35,343 --> 00:00:37,074
-One engine. Two readers.
+00:00:24,981 --> 00:00:28,308
+Copy it as LaTeX, straight into your
+paper.
 
 7
-00:00:37,454 --> 00:00:40,551
-From a pile of candidates, to the ones you can defend.
+00:00:28,688 --> 00:00:31,240
+SISSO-Sage gives your agent the evidence:
+
+8
+00:00:31,240 --> 00:00:35,160
+shortlist models that balance prediction
+with physical meaning,
+
+9
+00:00:35,160 --> 00:00:37,463
+and trace each feature to its source.
+
+10
+00:00:37,843 --> 00:00:39,574
+One engine. Two readers.
+
+11
+00:00:39,954 --> 00:00:43,051
+From a pile of candidates, to the ones you
+can defend.
 
